@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 15:14:41 -0800
+Subject: [PATCH] [bugs #2672] mcs51 peephole: keep the last entries of a jump
+ table
+
+For switches with up to 7 case values, or up to 16 with
+--opt-code-speed, genJumpTab emits a table with one ljmp per value, and
+the code before the table multiplies the value by the size of an entry.
+Rule 107 removes ljmp instructions that jump to the label after them.
+Rules 200.a and 200.b remove sjmp instructions of that kind, and the
+entries of a table are sjmp instructions after rule 260.x has been
+applied. The three rules were also applied inside a jump table.
+
+When the last entry jumped to the block that follows the table, the
+optimizer removed the entry. That alone is harmless, because the
+highest value then jumps to the address at which the entry was. The
+optimizer goes through the rules again after it has applied a rule
+marked restart, and in each further pass it removed one more entry that
+jumped to the same block. In
+
+    switch (s)
+      {
+      case 4:
+      case 3:
+        g = 0x33;
+        return 0xa3;
+      case 0:
+        return 0xa0;
+      ...
+
+the entries for 3 and 4 were both removed, and for s == 4 the program
+jumped to an address 3 bytes after the start of the block of case 3.
+This happened in every memory model.
+
+Add notInJumpTable() to rules 107, 200.a, and 200.b. Tables whose last
+entry jumps to the label after the table keep that entry now. Rule
+260.x does not match tables that have lost an entry, so these tables
+stayed ljmp tables. They can now become sjmp tables.
+
+notInJumpTable() is also false for lines that have no iCode, which are
+lines that a replacement produced from lines of several iCodes. The
+three rules are not applied to these lines either, so a redundant jump
+in such a line stays, also outside of a jump table.
+
+Adds tests/bug-2672.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/peeph.def                 |   6 +-
+ support/regression/tests/bug-2672.c | 151 ++++++++++++++++++++++++++++
+ 2 files changed, 154 insertions(+), 3 deletions(-)
+ create mode 100644 support/regression/tests/bug-2672.c
+
+diff --git a/src/mcs51/peeph.def b/src/mcs51/peeph.def
+index 7c94ef682..96d8688ec 100644
+--- a/src/mcs51/peeph.def
++++ b/src/mcs51/peeph.def
+@@ -404,7 +404,7 @@ replace {
+ } by {
+ 	;	Peephole 107	removed redundant ljmp
+ %1:
+-} if labelRefCountChange(%1 -1)
++} if notInJumpTable(), labelRefCountChange(%1 -1)
+ 
+ replace restart {
+ 	ljmp	%5
+@@ -2224,7 +2224,7 @@ replace {
+ } by {
+ 	;	Peephole 200.a	removed redundant sjmp
+ %1:
+-} if labelRefCountChange(%1 -1)
++} if notInJumpTable(), labelRefCountChange(%1 -1)
+ 
+ replace {
+ 	sjmp	%1
+@@ -2234,7 +2234,7 @@ replace {
+ 	;	Peephole 200.b	removed redundant sjmp
+ %2:
+ %1:
+-} if labelRefCountChange(%1 -1)
++} if notInJumpTable(), labelRefCountChange(%1 -1)
+ 
+ replace {
+ 	push	acc
+diff --git a/support/regression/tests/bug-2672.c b/support/regression/tests/bug-2672.c
+new file mode 100644
+index 000000000..ac824582f
+--- /dev/null
++++ b/support/regression/tests/bug-2672.c
+@@ -0,0 +1,151 @@
++/* bug-2672.c
++   The mcs51 peephole optimizer applied rules 107 and 200.a, which remove a
++   jump to the label that follows it, also inside a jump table, and removed
++   one more entry from the end of the table in each pass over the rules.
++   When the two highest case values of a switch shared the first block of
++   the switch body, the program jumped into the middle of the first
++   instruction of that block for the highest value.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC_mcs51
++#define DATA __data
++#else
++#define DATA
++#endif
++
++static DATA unsigned char g;
++static volatile DATA unsigned char v;
++
++/* The two highest values share the first block. */
++static unsigned char
++twoLast (unsigned char s)
++{
++  switch (s)
++    {
++    case 4:
++    case 3:
++      g = 0x33;
++      return 0xa3;
++    case 0:
++      return 0xa0;
++    case 1:
++      return 0xa1;
++    case 2:
++      return 0xa2;
++    }
++  return 0xff;
++}
++
++/* The three highest values share the first block. */
++static unsigned char
++threeLast (unsigned char s)
++{
++  switch (s)
++    {
++    case 5:
++    case 4:
++    case 3:
++      g = 0x44;
++      return 0xb3;
++    case 0:
++      return 0xb0;
++    case 1:
++      return 0xb1;
++    case 2:
++      return 0xb2;
++    }
++  return 0xff;
++}
++
++/* Only the highest value belongs to the first block. */
++static unsigned char
++oneLast (unsigned char s)
++{
++  switch (s)
++    {
++    case 3:
++      g = 0x55;
++      return 0xc3;
++    case 0:
++      return 0xc0;
++    case 1:
++      return 0xc1;
++    case 2:
++      return 0xc2;
++    }
++  return 0xff;
++}
++
++/* The optimizer goes through the rules again after it has applied a rule
++   marked restart. The number of assignments to v is such that the jump of
++   the range check is in the range of sjmp only after the table has become
++   shorter. The optimizer then applies rule 112.b to that jump in the second
++   pass and examines the table a third time. */
++#define V4 v = 1; v = 2; v = 3; v = 4;
++
++static unsigned char
++padded (unsigned char s)
++{
++  switch (s)
++    {
++    case 4:
++    case 3:
++      g = 0x33;
++      break;
++    case 0:
++      g = 1;
++      break;
++    case 1:
++      g = 2;
++      break;
++    case 2:
++      g = 3;
++      V4 V4 V4 V4 V4 V4 V4
++      v = 5;
++      break;
++    }
++  return g;
++}
++
++static const unsigned char twoRet[] = {0xa0, 0xa1, 0xa2, 0xa3, 0xa3, 0xff};
++static const unsigned char twoG[] = {0x00, 0x00, 0x00, 0x33, 0x33, 0x00};
++static const unsigned char threeRet[] = {0xb0, 0xb1, 0xb2, 0xb3, 0xb3, 0xb3, 0xff};
++static const unsigned char threeG[] = {0x00, 0x00, 0x00, 0x44, 0x44, 0x44, 0x00};
++static const unsigned char oneRet[] = {0xc0, 0xc1, 0xc2, 0xc3, 0xff};
++static const unsigned char oneG[] = {0x00, 0x00, 0x00, 0x55, 0x00};
++static const unsigned char paddedRet[] = {0x01, 0x02, 0x03, 0x33, 0x33, 0x00};
++
++void
++testBug (void)
++{
++  unsigned char i;
++
++  for (i = 0; i < 6; i++)
++    {
++      g = 0;
++      ASSERT (twoLast (i) == twoRet[i]);
++      ASSERT (g == twoG[i]);
++    }
++
++  for (i = 0; i < 7; i++)
++    {
++      g = 0;
++      ASSERT (threeLast (i) == threeRet[i]);
++      ASSERT (g == threeG[i]);
++    }
++
++  for (i = 0; i < 5; i++)
++    {
++      g = 0;
++      ASSERT (oneLast (i) == oneRet[i]);
++      ASSERT (g == oneG[i]);
++    }
++
++  for (i = 0; i < 6; i++)
++    {
++      g = 0;
++      ASSERT (padded (i) == paddedRet[i]);
++    }
++}

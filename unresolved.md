@@ -4,7 +4,6 @@ The problem is reproduced or located, and the fork does not have a patch for it.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|
-| [bugs #2672](https://sourceforge.net/p/sdcc/bugs/2672/) | [mcs51: peephole rule 107 removes the last two entries of an ljmp jump table](tickets/bugs/2672.md) | Keep open. Peephole rule 107 of mcs51 needs a condition that excludes jump tables. | tested, r17176 |
 | [bugs #2893](https://sourceforge.net/p/sdcc/bugs/2893/) | [Warning about an empty translation unit before the syntax error when the first token of a file is invalid](tickets/bugs/2893.md) | Keep open. r13845 changed the wording of the warning and not the condition for it. | tested, r17176 |
 | [bugs #3153](https://sourceforge.net/p/sdcc/bugs/3153/) | [Multiple definition of line labels at link time with --debug for static functions defined in a header](tickets/bugs/3153.md) | Keep open for static functions in headers. r12010 fixed the reported case of an inline function without static. | tested, r17176 |
 | [bugs #3393](https://sourceforge.net/p/sdcc/bugs/3393/) | [Designated initializer for a member of a nested anonymous union is missing from data images](tickets/bugs/3393.md) | Keep open for the nested-union case of the third comment, or move that case to a new ticket and close this one. | tested, r17176 |

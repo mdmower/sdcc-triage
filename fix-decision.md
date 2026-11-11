@@ -4,6 +4,7 @@ The fork has a patch, and the patch contains a choice that a maintainer should c
 
 | Ticket | Entry | Recommended action | Evidence | Patch |
 |---|---|---|---|---|
+| [bugs #2672](https://sourceforge.net/p/sdcc/bugs/2672/) | [mcs51: peephole rules 107 and 200.a remove the last entries of a jump table](tickets/bugs/2672.md) | Apply and close. Confirm the cost in code size: 2 or 3 bytes in some tables and 2 bytes for some jumps outside of tables. | tested, r17192 | [bugs-2672.patch](patches/bugs-2672.patch) |
 | [bugs #2948](https://sourceforge.net/p/sdcc/bugs/2948/) | [An anonymous struct in a union, or in braces of its own, gets only its first member initialized](tickets/bugs/2948.md) | Confirm the reading of braces under Decision. Apply after the patch for #3121 and close. | tested, r17192 | [bugs-2948.patch](patches/bugs-2948.patch) |
 | [bugs #2970](https://sourceforge.net/p/sdcc/bugs/2970/) | [sdas opens the .rel file in text mode again since r16921, which removes the fix of r12963](tickets/bugs/2970.md) | Decide whether r16921 changed the mode on purpose. If not, apply the patch, which has no test and was not run on Windows. | read, r17192 | [bugs-2970.patch](patches/bugs-2970.patch) |
 | [bugs #3121](https://sourceforge.net/p/sdcc/bugs/3121/) | [A designator after a positional initializer is misassigned or rejected in an automatic object](tickets/bugs/3121.md) | Confirm the reading of C11 6.7.9p19 under Decision. Then apply the patch and close. | tested, r17192 | [bugs-3121.patch](patches/bugs-3121.patch) |
