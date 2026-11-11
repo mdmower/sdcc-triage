@@ -6,7 +6,8 @@
 PATH is a clone of the fork. The commits in BASE..HEAD (default upstream/trunk..main) are the patch
 series. Commit subjects start with "[TRACKER #NUM]", which assigns each commit to the entry
 tickets/TRACKER/NUM.md. An entry with a patch_of field takes the commits of the ticket that the
-field names. With --check nothing is written and the exit status is 1 when a file is out
+field names. Commits whose subjects start with "[fork]" are about the fork itself, such as its
+readme, and are not part of the patch series. With --check nothing is written and the exit status is 1 when a file is out
 of date or when entries and commits do not match.
 """
 import argparse
@@ -156,8 +157,12 @@ def ticket_url(config, key):
 def series(fork, base, head):
     out = git(fork, "log", "--reverse", "--format=%H%x09%s", "%s..%s" % (base, head)).stdout
     commits = []
+    fork_only = 0
     for line in out.splitlines():
         sha, subject = line.split("\t", 1)
+        if subject.startswith("[fork]"):
+            fork_only += 1
+            continue
         m = re.match(r"\[([a-z-]+) #(\d+)\]", subject)
         key = None
         if m:
@@ -165,7 +170,7 @@ def series(fork, base, head):
             key = "%s/%s" % (m.group(1), m.group(2).zfill(width))
         files = git(fork, "show", "--format=", "--name-only", sha).stdout.split()
         commits.append({"sha": sha, "subject": subject, "key": key, "files": files})
-    return commits
+    return commits, fork_only
 
 
 def name_patches(commits):
@@ -281,9 +286,13 @@ def category_page(config, cat, entries):
     return "\n".join(lines) + "\n"
 
 
-def readme_block(config, entries, commits, rev, head_sha):
+def readme_block(config, entries, commits, fork_only, rev, head_sha):
     lines = [BEGIN, ""]
-    lines.append("The fork is trunk %s plus %d commits." % (rev, len(commits)))
+    if fork_only:
+        lines.append("The fork is trunk %s plus %d commits, and %d of them are patches."
+                     % (rev, len(commits) + fork_only, len(commits)))
+    else:
+        lines.append("The fork is trunk %s plus %d commits." % (rev, len(commits)))
     if config.get("fork_url"):
         lines.append("Its head is [`%s`](%s/commit/%s)." % (head_sha[:9], config["fork_url"],
                                                           head_sha))
@@ -324,7 +333,7 @@ def main():
 
     config = json.load(open(os.path.join(ROOT, "config.json"), encoding="utf-8"))
     entries = load_entries()
-    commits = series(args.fork, args.base, args.head)
+    commits, fork_only = series(args.fork, args.base, args.head)
     base_msg = git(args.fork, "log", "-n", "1", "--format=%B", args.base).stdout
     m = re.search(r"git-svn-id: \S+@(\d+)", base_msg)
     rev = "r" + m.group(1) if m else git(args.fork, "rev-parse", "--short", args.base).stdout.strip()
@@ -381,7 +390,7 @@ def main():
         sys.exit("README.md lacks the generated block markers")
     before, rest = text.split(BEGIN, 1)
     after = rest.split(END, 1)[1]
-    out.write(readme, before + readme_block(config, entries, commits, rev, head_sha) + after)
+    out.write(readme, before + readme_block(config, entries, commits, fork_only, rev, head_sha) + after)
 
     for p in problems:
         print("PROBLEM: " + p)

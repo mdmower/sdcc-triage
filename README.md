@@ -47,8 +47,9 @@ Entries are marked `tested` or `read`:
 
 ## Patches
 
-`patches/` has one patch per commit of the fork, in `git format-patch` form. Their order is in
-`patches/series`. Apply a patch in a trunk working copy with `patch -p1 < FILE` or `git am FILE`.
+`patches/` has one patch per commit of the fork, in `git format-patch` form. Commits whose subjects
+start with `[fork]` are about the fork itself and do not have patches. The order of the patches is
+in `patches/series`. Apply a patch in a trunk working copy with `patch -p1 < FILE` or `git am FILE`.
 Some patches depend on other patches of the series. For those, the patches to apply first are
 named on the `Patch` line of the entry.
 
