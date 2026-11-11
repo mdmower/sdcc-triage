@@ -4,10 +4,11 @@ Date: Mon, 9 Nov 2026 21:55:52 -0800
 Subject: [PATCH] [bugs #4158] mcs51: free the operand of a struct return
 
 genRet's struct-return path jumped to jumpret without freeing IC_LEFT's
-asmop. A later return of the same variable then reused the cached asmop,
-including its current DPTR offset, instead of loading the address again,
-and read from wherever DPTR happened to point. Seen with --model-large,
---model-huge and --model-large --stack-auto.
+asmop. For a later return of the same variable genRet then reused that
+asmop, including its current DPTR offset, instead of loading the address
+again, and the code for that return read from wherever DPTR happened to
+point. Seen with --model-large, --model-huge, and --model-large
+--stack-auto.
 
 Adds regression test bug-4158.c.
 

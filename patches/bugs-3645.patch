@@ -4,7 +4,14 @@ Date: Tue, 10 Nov 2026 02:56:02 -0800
 Subject: [PATCH] [bugs #3645] Do not take a code-memory array for a string
  literal initializer
 
-createIvalCharPtr recognized a string literal initializing a character array by its storage class (S_CODE) alone. Any other array object in code memory, such as a const array, matched too; the compiler then read the characters of a string that is not there (SIGSEGV) or failed the isstrlit assertion in freeStringSymbol. The initializer now also has to be a string literal symbol, so the invalid initialization falls through to the existing diagnostics (error 69 without braces, error 47 with braces).
+createIvalCharPtr recognized a string literal initializing a character
+array by its storage class (S_CODE) alone. Any other array object in
+code memory, such as a const array, matched too. The compiler then read
+the characters of a string that is not there (SIGSEGV) or failed the
+isstrlit assertion in freeStringSymbol. The initializer now also has to
+be a string literal symbol, so the compiler reports the invalid
+initialization with the existing diagnostics (error 69 without braces,
+error 47 with braces).
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

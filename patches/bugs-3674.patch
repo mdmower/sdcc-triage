@@ -4,11 +4,11 @@ Date: Tue, 10 Nov 2026 03:03:56 -0800
 Subject: [PATCH] [bugs #3674] Do not promote an explicitly cast variable
  argument that is not a variable
 
-With --std-sdccXX, mcs51 (like ds390, mos6502, pic14 and pic16) passes an
-explicitly cast variable argument without integer promotion. A cast to the
-type the operand already has is removed when the tree is decorated, and the
-operand is marked with removedCast instead. processParms honoured that mark
-on symbols only, so in
+With --std-sdccXX, mcs51 (like ds390, mos6502, pic14, and pic16) passes
+an explicitly cast variable argument without integer promotion. Casts to
+the type the operand already has are removed when the tree is decorated,
+and the operand is marked with removedCast instead. processParms honored
+that mark on symbols only, so in
 
     vafunc (3, (uint8_t)var, (uint8_t)u8func (), (uint8_t)*p);
 
@@ -17,12 +17,12 @@ va_arg (ap, unsigned char) in the callee read the wrong bytes. The same
 happened for array elements and for structure members reached through a
 pointer (bug #3172).
 
-Honour the mark on any expression. Nothing else uses that part of the node
-in an expression that can be an argument, and the mark is only set where
-the source has a cast.
+Honor the mark on any expression. Nothing else uses that part of the
+node in an expression that can be an argument, and the mark is only set
+where the source has a cast.
 
-Adds tests/bug-3674.c and enables the assertions in tests/bug-3172.c.in for
-the ports that omit the promotion; both failed on mcs51.
+Adds tests/bug-3674.c and enables the assertions in tests/bug-3172.c.in
+for the ports that omit the promotion.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

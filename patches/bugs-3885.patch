@@ -4,12 +4,13 @@ Date: Mon, 9 Nov 2026 22:29:23 -0800
 Subject: [PATCH] [bugs #3885] mcs51: keep the stack balanced when pushing a
  struct through a busy pointer register
 
-Pushing a struct argument by value (IPUSH_VALUE_AT_ADDRESS) reads it through
-r0 or r1. When both were in use, getFreePtr saved the chosen register with a
-push, which left it on the stack underneath the argument bytes; it was never
-popped, so after the call the saved registers were restored one slot off and
-the stack pointer stayed one byte too high. For IPUSH and PCALL getFreePtr
-already saves the register in B instead; do the same here.
+The code that pushes a struct argument by value (IPUSH_VALUE_AT_ADDRESS)
+reads it through r0 or r1. When both were in use, getFreePtr saved the
+register it chose with a push, which left it on the stack underneath the
+argument bytes. It was never popped, so after the call the registers
+that had been saved were restored one slot off and the stack pointer
+stayed one byte too high. For IPUSH and PCALL getFreePtr already saves
+the register in B instead. Do the same here.
 
 Seen with --stack-auto, where register pressure is higher. Re-enables
 tests/dynamiccstructret.c.in for mcs51 with --stack-auto.

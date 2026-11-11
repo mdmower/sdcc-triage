@@ -4,16 +4,18 @@ Date: Mon, 9 Nov 2026 22:40:34 -0800
 Subject: [PATCH] [bugs #3563] mcs51: do not overlay stack variables that are
  live at the same time
 
-Stack offsets are assigned per block: variables of sibling blocks share
-stack space. Optimization can make a variable live outside the block it was
-declared in, most easily across the bodies of inlined functions, and then
-two live variables ended up in overlapping slots; in the test a parameter of
-one inlined function overwrote the result of another.
+Stack offsets are assigned per block, and variables of sibling blocks
+share stack space. After optimization, variables can be live outside the
+block they were declared in, most easily across the bodies of inlined
+functions, and then two live variables ended up in overlapping slots. In
+the test a parameter of one inlined function overwrote the result of
+another.
 
-The tree-decomposition register allocator already moves each variable to the
-lowest common ancestor of the blocks where it is live (added for bug #2567,
-with a TODO to do the same for the old allocator). mcs51 still uses the old
-allocator, so do it there before the stack offsets are assigned.
+The tree-decomposition register allocator already moves each variable to
+the lowest common ancestor of the blocks where it is live (added for
+bug #2567, with a TODO to do the same for the old allocator). mcs51
+still uses the old allocator, so do it there before the stack offsets
+are assigned.
 
 Re-enables tests/bug-3563.c for mcs51.
 

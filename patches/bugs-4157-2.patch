@@ -4,14 +4,15 @@ Date: Tue, 10 Nov 2026 08:20:17 -0800
 Subject: [PATCH] [bugs #4157] Return a constant struct object from the object,
  not from its first initializer
 
-A return statement replaced an object declared constexpr by its value. For
-a struct or union that value is the first initializer alone, so the function
-returned nothing useful. Every compound literal whose first initializer is a
-constant is marked constexpr implicitly and was hit as well: the function
-returned (struct s){1, f ()} wrongly, but (struct s){f (), 1} correctly.
+In a return statement, an object declared constexpr was replaced by its
+value. For a struct or union that value is the first initializer alone,
+so the function returned nothing useful. Every compound literal whose
+first initializer is a constant is marked constexpr implicitly and was
+affected as well. The function returned (struct s){1, f ()} wrongly, but
+(struct s){f (), 1} correctly.
 
-A struct or union is returned from its object, so leave the expression of
-the return statement alone for these types.
+Structs and unions are returned from their objects, so leave the
+expression of the return statement alone for these types.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

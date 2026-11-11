@@ -4,18 +4,18 @@ Date: Mon, 9 Nov 2026 22:43:56 -0800
 Subject: [PATCH] [bugs #3836] Use the generic pointer as the common type of a
  generic and a specific pointer
 
-computeType took the left operand's type whenever it was a pointer. With a
-pointer into a specific address space on the left and a generic pointer on
-the right, as in '&local != p' on mcs51, the right operand then had to be
-converted implicitly from generic to specific, which is an error (129). The
-same expression with the operands swapped compiled.
+computeType took the left operand's type whenever it was a pointer. With
+a pointer into a specific address space on the left and a generic
+pointer on the right, as in '&local != p' on mcs51, the right operand
+then had to be converted implicitly from generic to specific, which is
+an error (129). The same expression with the operands swapped compiled.
 
-A generic pointer can represent the specific one but not the other way
-round, so let it prevail on either side. Function pointers keep the old
-rule.
+Generic pointers can represent specific ones but not the other way
+around, so use the generic type whichever side it is on. Function
+pointers keep the old rule.
 
-Re-enables tests/bug-3830.c for mcs51 (it stays disabled for ds390, which is
-not built or tested here) and adds tests/bug-3836.c.
+Re-enables tests/bug-3830.c for mcs51 (it stays disabled for ds390,
+which is not built or tested here) and adds tests/bug-3836.c.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

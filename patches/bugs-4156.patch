@@ -4,17 +4,15 @@ Date: Mon, 9 Nov 2026 23:15:35 -0800
 Subject: [PATCH] [bugs #4156] Keep reads through a pointer to volatile after a
  store
 
-'*p = v; return *p;' with p pointing to a volatile object returned v without
-reading the object again. Common subexpression elimination forwards the
-stored value to a later read through the same pointer, and its volatility
-check looked at the pointer operand, which is not volatile; what it points
-to is.
+'*p = v; return *p;' with p pointing to a volatile object returned v
+without reading the object again. Common subexpression elimination
+forwards the value that was stored to a later read through the same
+pointer, and its volatility check looked at the pointer operand, which
+is not volatile. What it points to is.
 
-No regression test: a read that returns what was just written cannot be
-told from no read at run time in the simulator setup of the test suite.
-Checked in the generated code for xdata and generic pointers: the read is
-back, two reads stay two reads, and a pointer to a non-volatile object still
-gets the store forwarded.
+There is no regression test, because reads that return what was just
+written cannot be told from no read at run time in the simulator setup
+of the test suite.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

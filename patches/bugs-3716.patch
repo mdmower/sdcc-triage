@@ -4,10 +4,10 @@ Date: Mon, 9 Nov 2026 23:21:44 -0800
 Subject: [PATCH] [bugs #3716] mcs51: load the accumulator with 'mov a', not
  'mov acc'
 
-aopPut wrote a value read through @Ri or from Rn into an operand that lives
-in the accumulator as 'mov acc,@r0': a move to the direct address of ACC,
-two bytes and two cycles. 'mov a,@r0' does the same in one byte. Only other
-registers need their direct-address name there.
+aopPut wrote a value read through @Ri or from Rn into an operand that is
+in the accumulator as 'mov acc,@r0', which is a move to the direct
+address of ACC, two bytes and two cycles. 'mov a,@r0' does the same in
+one byte. Only other registers need their direct-address name there.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

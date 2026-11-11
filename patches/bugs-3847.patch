@@ -4,12 +4,12 @@ Date: Tue, 10 Nov 2026 08:18:37 -0800
 Subject: [PATCH] [bugs #3847] Return the struct value of a call from the
  call's result object
 
-Only a variable reached the RETURN iCode as a struct or union object. The
+Only variables reached the RETURN iCode as struct or union objects. The
 value of a call arrived as the address of the object that geniCodeCall()
-makes for it, and no code generator can return from an address: z80 stopped
-with an internal error, mcs51 returned the address in the registers and left
-the caller's object unwritten (it reports error 172 since the stopgap for
-bug #4157).
+makes for it, and no code generator can return from an address. z80
+stopped with an internal error, and mcs51 returned the address in the
+registers and left the caller's object unwritten (it reports error 172
+since the temporary measure for bug #4157).
 
 ast2iCode() now gives a return statement whose expression is a call of
 struct or union type that result object itself, so the value is returned

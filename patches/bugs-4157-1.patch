@@ -4,14 +4,14 @@ Date: Mon, 9 Nov 2026 23:11:50 -0800
 Subject: [PATCH] [bugs #4157] mcs51: refuse struct returns that would be
  miscompiled
 
-A function can return a struct or union only from a plain variable. For any
-other expression of struct type (a call, *p, a[i], s.m, a compound literal,
-a conditional) the return statement receives the address of the object; the
-code generator returned that address in the registers and never wrote the
-caller's object, without any diagnostic.
+Functions can return a struct or union only from a plain variable. For
+any other expression of struct type (a call, *p, a[i], s.m, a compound
+literal, a conditional) the return statement receives the address of the
+object. The code generator returned that address in the registers and
+never wrote the caller's object, without any diagnostic.
 
 Until returns of such expressions are implemented, report an error that
-says how to rewrite the code. This is a stopgap, not the fix.
+says how to rewrite the code. This is a temporary measure, not the fix.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

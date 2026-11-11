@@ -5,12 +5,13 @@ Subject: [PATCH] [bugs #4240] Do not reverse a loop whose body uses the loop
  variable through a cast
 
 isConformingBody() decides whether a for loop may be turned into a
-counting-down loop. It looked for the loop control variable only as a direct
-operand of the operators it lists, so '(uint8_t)i' in the body went
-unnoticed and the iterations ran in reverse order with the wrong values of i.
+counting-down loop. It looked for the loop control variable only as a
+direct operand of the operators it lists, so '(uint8_t)i' in the body
+was not found and the iterations ran in reverse order with the wrong
+values of i.
 
-Treat the variable as used when it is a direct operand of any other operator
-as well.
+Treat the variable as used when it is a direct operand of any other
+operator as well.
 
 Adds tests/bug-4240.c.
 

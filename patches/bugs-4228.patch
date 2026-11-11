@@ -1,20 +1,34 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Matt Mower <mdmower@cmphys.com>
 Date: Tue, 10 Nov 2026 08:22:07 -0800
-Subject: [PATCH] [bugs #4228] Keep the tree that decorating a checked
- initializer returns
+Subject: [PATCH] [bugs #4228] Keep the tree that decorateType returns when an
+ initializer is checked
 
-prepareDeclarationSymbol (constexpr objects) and the compound literal rule ask constExprTree whether the first initializer is a constant expression. constExprTree decorates the tree it is given and returns only a truth value, so the tree decorateType returns was dropped. Where decoration replaces the root, as it does for _Generic and for a conditional operator with a constant condition or equal operands, the initializer list kept the old root, which is marked decorated and has no type. Initializing the object from it gave 'indirections to different types assignment' from type 'void', then a validateLink internal error or a SIGSEGV:
+prepareDeclarationSymbol (constexpr objects) and the compound literal
+rule call constExprTree to check whether the first initializer is a
+constant expression. constExprTree decorates the tree it is given and
+returns only a truth value, so the tree decorateType returns was
+dropped. Where decorateType replaces the root, as it does for _Generic
+and for a conditional operator with a constant condition or equal
+operands, the initializer list kept the old root, which is marked
+decorated and has no type. When the object was initialized from it, the
+compiler reported 'indirections to different types assignment' from type
+'void' and then stopped with a validateLink internal error or a SIGSEGV:
 
     constexpr int object = _Generic (1, int: 1, default: 1.0);
     constexpr int object = 1 ? 2 : 3;
     return (int){1 ? 2 : 3};
 
-The new constExprIlist decorates the first expression of the list in place, as resolveIvalSym does, and then checks it. An initializer whose root is not replaced is decorated exactly as before, so no generated code changes.
+The new constExprIlist decorates the first expression of the list in
+place, as resolveIvalSym does, and then checks it. Initializers whose
+root is not replaced are decorated exactly as before.
 
-A bit-field width was evaluated twice with constExprValue, which drops the returned tree in the same way, so 'int a : 1 ? 3 : 4;' was rejected as not constant. It is evaluated once now.
+Bit-field widths were evaluated twice with constExprValue, which drops
+the tree that decorateType returns in the same way, so
+'int a : 1 ? 3 : 4;' was rejected as not constant. They are evaluated
+once now.
 
-Adds tests/bug-4228.c and valdiag/tests/bug-4228.c; both failed before.
+Adds tests/bug-4228.c and valdiag/tests/bug-4228.c.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

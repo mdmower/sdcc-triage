@@ -1,10 +1,25 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Matt Mower <mdmower@cmphys.com>
 Date: Tue, 10 Nov 2026 07:50:44 -0800
-Subject: [PATCH] [bugs #3121] Honour designators anywhere in the initializer
+Subject: [PATCH] [bugs #3121] Honor designators anywhere in the initializer
  list of an object initialized by code
 
-createIvalStruct() took designated initializers only ahead of the first one without a designator; behind it they went to the members in order, or were rejected with error 69. Several initializers for parts of one member each zeroed the rest of it again, and one for a part of a member that an expression initializes ({1, .t = x, .t.l = 41}, the example of C defect report 413) was dropped with warning 147. createIvalArray() left the elements ahead of a designated one uninitialized and zeroed elements whose initializer came later in the list. Such lists are now ordered with reorderIlistFull(), as printIval() does for static storage: designatedIlist() turns the result into the form createIvalStruct() handles, createIvalArray() walks it and zeroes the holes, and an initializer for a part of an object that an expression initialized as a whole is applied afterwards as a store to that part only (createIvalPart).
+createIvalStruct() took designated initializers only ahead of the first
+one without a designator. Behind it they were assigned to the members in
+order, or were rejected with error 69. Several initializers for parts of
+one member each zeroed the rest of it again, and one for a part of a
+member that an expression initializes ({1, .t = x, .t.l = 41}, the
+example of C defect report 413) was dropped with warning 147.
+createIvalArray() left the elements ahead of a designated one
+uninitialized and zeroed elements whose initializer came later in the
+list.
+
+Such lists are now ordered with reorderIlistFull(), as printIval() does
+for static storage. designatedIlist() turns the result into the form
+createIvalStruct() handles. createIvalArray() walks it and zeroes the
+holes. Initializers for a part of an object that an expression
+initialized as a whole are applied afterwards as stores to that part
+only (createIvalPart).
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

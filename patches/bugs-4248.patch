@@ -4,12 +4,12 @@ Date: Tue, 10 Nov 2026 01:55:19 -0800
 Subject: [PATCH] [bugs #4248] Initialize a compound literal in a declaration's
  initializer only once
 
-gatherAutoInit walks a block's symbols and, for each initializer, appends
-the temporary symbols of the compound literals it contains to the same
-chain and initializes them at once, ahead of the declaration that uses
-them. The walk then reached those symbols itself. One whose initializer is
-kept for compile-time evaluation was initialized a second time, after the
-declaration:
+gatherAutoInit walks a block's symbols and, for each initializer,
+appends the temporary symbols of the compound literals it contains to
+the same chain and initializes them at once, ahead of the declaration
+that uses them. The walk then reached those symbols itself. One whose
+initializer is kept for compile-time evaluation was initialized a second
+time, after the declaration. The code for
 
     unsigned *const p = init (&(unsigned){0});
 

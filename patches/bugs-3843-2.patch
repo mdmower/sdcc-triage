@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 20:46:27 -0800
+Subject: [PATCH] [bugs #3843] Limit the distance from a jump table back to a
+ case label before it
+
+labelJTInRange() added the backward and the forward distance of each case label and compared the sum with one limit. That limit is right for a label after the jump table. It grows with the index of the entry, because later entries are nearer to such a label. A label before the table is farther from later entries, so the limit was too high for it. The mcs51 rules 260.a to 260.m then replaced the ljmp instructions of the table by sjmp although one of them was out of range, and the assembler reported "Branching Range Exceeded".
+
+For a label before the table, the function now computes the distance from the label to the end of the entry's jump in the replacement and accepts at most 127 bytes.
+
+The source file in the ticket fails for another reason. This is a second cause of the same assembler error.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCpeeph.c                       | 17 +++++++-
+ support/regression/tests/bug-3843-2.c | 62 +++++++++++++++++++++++++++
+ 2 files changed, 77 insertions(+), 2 deletions(-)
+ create mode 100644 support/regression/tests/bug-3843-2.c
+
+diff --git a/src/SDCCpeeph.c b/src/SDCCpeeph.c
+index 416fd7255..84afe7be2 100644
+--- a/src/SDCCpeeph.c
++++ b/src/SDCCpeeph.c
+@@ -479,8 +479,21 @@ FBYNAME (labelJTInRange)
+       if (!lbl)
+         return false;
+ 
+-      dist = (pcDistance (currPl, lbl, true) +
+-              pcDistance (currPl, lbl, false));
++      dist = pcDistance (currPl, lbl, true);
++      if (dist)
++        {
++          /* The label is before the jump table. dist is the distance from
++             the label to the end of currPl, and currPl is at least 1 byte
++             long. In the replacement, the table begins 4 bytes after the
++             place where currPl begins, and each jump in it is 2 bytes long. */
++          if (dist-1 +          /* from the label to currPl */
++              4+2*(i+1)         /* from currPl to the end of this jump */
++              > 127)            /* range of sjmp */
++            return false;
++          continue;
++        }
++
++      dist = pcDistance (currPl, lbl, false);
+ 
+       /* three terms used to calculate allowable distance */
+       /* Could be made more exact and port-specific. */
+diff --git a/support/regression/tests/bug-3843-2.c b/support/regression/tests/bug-3843-2.c
+new file mode 100644
+index 000000000..cb8fee532
+--- /dev/null
++++ b/support/regression/tests/bug-3843-2.c
+@@ -0,0 +1,62 @@
++/* bug-3843-2.c
++   mcs51 assembler error "Branching Range Exceeded". The peephole optimizer
++   replaces the ljmp instructions of a jump table by sjmp when every case
++   label is in range. It allowed a label before the table the distance that
++   it allows a label after the table, and more for each later entry of the
++   table, although later entries are farther from a label before the table.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC_mcs51
++#define NOP __asm nop __endasm
++#else
++#define NOP
++#endif
++
++#define NOP10 NOP; NOP; NOP; NOP; NOP; NOP; NOP; NOP; NOP; NOP
++#define NOP50 NOP10; NOP10; NOP10; NOP10; NOP10
++
++/* The label of case 6 is the top of the loop. With 110 bytes of nop between
++   the top of the loop and the table, an sjmp in the last entry of the table
++   cannot reach that label. */
++static unsigned char
++loop (unsigned char x)
++{
++  unsigned char r = 0;
++
++  while (1)
++    {
++      x >>= 1;
++      NOP50;
++      NOP50;
++      NOP10;
++      switch (x)
++        {
++        case 0: r += 1; break;
++        case 1: r += 2; break;
++        case 2: r += 4; break;
++        case 3: r += 8; break;
++        case 4: r += 16; break;
++        case 5: r += 32; break;
++        case 6: continue;
++        }
++      break;
++    }
++  return r;
++}
++
++void
++testBug (void)
++{
++  ASSERT (loop (0) == 1);
++  ASSERT (loop (2) == 2);
++  ASSERT (loop (5) == 4);
++  ASSERT (loop (7) == 8);
++  ASSERT (loop (9) == 16);
++  ASSERT (loop (11) == 32);
++  ASSERT (loop (12) == 8); /* case 6, then case 3 */
++  ASSERT (loop (13) == 8);
++  ASSERT (loop (14) == 0);
++  ASSERT (loop (255) == 0);
++}

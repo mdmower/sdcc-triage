@@ -4,12 +4,12 @@ Date: Mon, 9 Nov 2026 22:26:53 -0800
 Subject: [PATCH] [bugs #3903] mcs51: compare addresses of banked functions
  without an internal error
 
-With --model-huge every function is banked and its address is three bytes.
-Comparisons of such addresses go through sdcc_gptr_cmp, and
-loadDptrFromOperand asserted ("need pointerCode") when the left operand was
-the immediate address of a function, because it only knew how to produce the
-third byte for a generic pointer made by a cast. For a banked function that
-byte is simply the bank, the top byte of the address.
+With --model-huge every function is banked and its address is three
+bytes. Such addresses are compared by sdcc_gptr_cmp, and
+loadDptrFromOperand asserted ("need pointerCode") when the left operand
+was the immediate address of a function, because it produced the third
+byte only for a generic pointer made by a cast. For a banked function
+that byte is simply the bank, the top byte of the address.
 
 Re-enables tests/funcptrcmp.c.in for mcs51.
 

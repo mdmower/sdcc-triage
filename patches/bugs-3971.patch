@@ -4,7 +4,19 @@ Date: Tue, 10 Nov 2026 02:44:03 -0800
 Subject: [PATCH] [bugs #3971] Fix crash on a string literal plus an offset in
  a static initializer
 
-constExprValue() recognized a string literal by the type of the node alone. The sum "AAA" + 3 carries a copy of the literal's array type, so the '+' node was taken for the literal and its operator was read as a pointer to a value, which crashed the compiler (all ports; on mcs51 for const objects in every model and for initialized objects in xdata). Only a symbol value node counts as a string literal now, and the sum goes on to the pointer-plus-constant case of initPointer(). The value made there keeps the literal's symbol, and printIvalCharPtr() enters the literal in ccpStr under its own name rather than as "(__str_0 + 3)", so that emitStaticSeg() emits the string when a const object refers to it with an offset.
+constExprValue() recognized a string literal by the type of the node
+alone. The sum "AAA" + 3 has a copy of the literal's array type, so the
+'+' node was taken for the literal and its operator was read as a
+pointer to a value, which crashed the compiler. The crash occurred on
+all ports. On mcs51 it occurred for const objects in every model and for
+initialized objects in xdata.
+
+Only symbol value nodes count as string literals now, and the sum is
+handled by the pointer-plus-constant case of initPointer(). The value
+made there keeps the literal's symbol, and printIvalCharPtr() enters the
+literal in ccpStr under its own name rather than as "(__str_0 + 3)", so
+that emitStaticSeg() emits the string when a const object refers to it
+with an offset.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

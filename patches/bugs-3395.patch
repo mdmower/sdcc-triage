@@ -4,9 +4,8 @@ Date: Mon, 9 Nov 2026 22:38:03 -0800
 Subject: [PATCH] [bugs #3395] Re-enable gte_pr30185 for mcs51 with
  --stack-auto
 
-The test passes now: it pushes structs by value under register pressure,
-which the fix for bugs #3885 repaired. With the previous compiler it still
-fails on both stack-auto variants.
+The test passes now. It pushes structs by value under register pressure,
+which the fix for bugs #3885 repaired.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

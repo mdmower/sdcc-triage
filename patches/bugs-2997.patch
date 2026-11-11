@@ -5,12 +5,12 @@ Subject: [PATCH] [bugs #2997] Keep the return value of an inlined __critical
  function
 
 When a __critical function is inlined its body is wrapped in a CRITICAL
-node. That node was created without a source location, so it carried the
-parser's current nesting level, not the level of the call, and fixupInline
-took the base level for the whole inlined body from it. For a call inside a
-nested block the return value was then assigned to one variable and read
-from another: the value was lost and warning 84 (may be used before
-initialization) appeared.
+node. That node was created without a source location, so it had the
+parser's current nesting level, not the level of the call, and
+fixupInline took the base level for the whole inlined body from it. For
+a call inside a nested block the return value was then assigned to one
+variable and read from another. The value was lost and warning 84 (may
+be used before initialization) appeared.
 
 Adds tests/bug-2997.c.
 

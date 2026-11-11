@@ -4,9 +4,19 @@ Date: Tue, 10 Nov 2026 02:43:55 -0800
 Subject: [PATCH] [bugs #4145] Do not take an expression computed from a
  constexpr object for the object
 
-The constexpr marker is kept in the type specifier, so an expression computed from a constexpr object inherits it through its type: 'x + c', 'x ? 4 : c', '(x, c)'. The same goes for a compound literal with a constant initializer, which is made constexpr implicitly, so 'x + (int){3}' is enough. propagateConstExpr and constExprValue took every node with the marker for the object itself and read the initializer of its symbol, which a computed expression does not have: SIGSEGV. typeofOp passed the marker on to what was declared with typeof or auto from such an expression, which then was a constexpr object without a constant initializer.
+The constexpr marker is kept in the type specifier, so expressions
+computed from a constexpr object inherit it through their type: 'x + c',
+'x ? 4 : c', '(x, c)'. The same goes for a compound literal with a
+constant initializer, which is made constexpr implicitly, so
+'x + (int){3}' is enough. propagateConstExpr and constExprValue took
+every node with the marker for the object itself and read the
+initializer of its symbol, which computed expressions do not have, so
+the compiler crashed with SIGSEGV. typeofOp passed the marker on to what
+was declared with typeof or auto from such an expression, which then was
+a constexpr object without a constant initializer.
 
-All three now ask for a symbol node. Nothing changes for an expression that did not crash or was not rejected before.
+All three now require a symbol node. Nothing changes for expressions
+that the compiler neither crashed on nor rejected before.
 
 Adds tests/bug-4145.c and valdiag/tests/bug-4145.c.
 

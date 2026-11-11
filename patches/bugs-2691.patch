@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 00:02:08 -0800
+Subject: [PATCH] [bugs #2691] The address of an element of a nested array of
+ pointers is a pointer to the element
+
+For an array that is an array element, a structure member, or the target
+of a pointer, geniCodeArray gives the operand for an element of object
+pointer type the type of the element and marks it with aggr2ptr.
+geniCodeAddressOf treats an lvalue iTemp of pointer type as already
+having the type of the address, which holds for the operands that
+geniCodeDerefPtr and geniCodeStruct make. It did so for these aggr2ptr
+operands as well, so '&a[i][j]' kept the type of 'a[i][j]'.
+
+Arithmetic on such an address was scaled by the size of the object the
+element points to, and '(&a[i][j])[k]' accessed an object of that type.
+Where pointer types differ in representation, the address was also
+treated as a pointer of the element's kind. Depending on the use, the
+compiler generated wrong code or stopped with an internal error, as in
+the bug report.
+
+geniCodeAddressOf now returns the operand with its type unchanged only
+when aggr2ptr is not set. Otherwise the rest of the function gives it
+the pointer-to-element type, as it does for elements of arithmetic
+types.
+
+Adds tests/bug-2691.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCicode.c                     |  5 +-
+ support/regression/tests/bug-2691.c | 98 +++++++++++++++++++++++++++++
+ 2 files changed, 102 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-2691.c
+
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index 3538286aa..27aac00f6 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -3065,7 +3065,10 @@ geniCodeAddressOf (operand *op)
+   sym_link *optype = operandType (op);
+   sym_link *opetype = getSpec (optype);
+ 
+-  if (IS_ITEMP (op) && IS_PTR (optype))
++  /* Lvalue iTemps of pointer type already have the type of the address,
++     except those that geniCodeArray marks with aggr2ptr. Those are
++     elements of arrays of pointers and have the type of the element. */
++  if (IS_ITEMP (op) && IS_PTR (optype) && !op->aggr2ptr)
+     {
+       op = operandFromOperand (op);
+       op->isaddr = 0;
+diff --git a/support/regression/tests/bug-2691.c b/support/regression/tests/bug-2691.c
+new file mode 100644
+index 000000000..e1a045cd0
+--- /dev/null
++++ b/support/regression/tests/bug-2691.c
+@@ -0,0 +1,98 @@
++/* bug-2691.c
++   The address of an element of an array of pointers had the type of the
++   element when the array was itself an array element or a struct member.
++   On every port, the compiler scaled arithmetic on such an address by the
++   wrong size. For mcs51, it also stopped with the internal error "need
++   pointerCode" or converted the address to a generic pointer into the
++   wrong address space.
++ */
++
++#include <testfwk.h>
++
++#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) // Lack of memory
++struct s
++{
++  char c;
++  char *names[2];
++  void *ptrs[2];
++};
++
++long g;
++char buf[2];
++long *arr[2][2];
++void *varr[2][2];
++void *q;
++struct s st;
++unsigned char one = 1;
++
++/* The loop of the Csmith program in the bug report, with fewer iterations
++   and a smaller array. */
++static unsigned char
++fromReport (void)
++{
++  long *l_2 = &g;
++  unsigned char n = 0;
++
++  for (g = 0; g > -3; g -= 1)
++    {
++      long **l_15[2][2] = {{&l_2, 0}, {&l_2, 0}};
++      long ***l_14 = &l_15[1][0];
++
++      (*l_14) = 0;
++      if (l_15[1][0] == 0 && l_15[0][0] == &l_2)
++        n++;
++    }
++  return n;
++}
++
++static void
++store (void *p, void *v)
++{
++  *(void **)p = v;
++}
++
++/* The address is converted to void * by assignment and as an argument. */
++static void
++toVoid (void)
++{
++  q = &varr[1][1];
++  *(void **)q = &g;
++  store (&varr[0][1], buf);
++  store (&st.ptrs[one], buf + 1);
++}
++
++static void
++arith (void)
++{
++  long **p = &arr[1][0] + 1;
++  char **n = &st.names[0] + one;
++
++  *p = &g;
++  *n = buf;
++  (&arr[0][0])[1] = &g;
++}
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) // Lack of memory
++  ASSERT (fromReport () == 3);
++
++  toVoid ();
++  ASSERT (varr[1][1] == &g);
++  ASSERT (varr[0][1] == buf);
++  ASSERT (varr[0][0] == 0 && varr[1][0] == 0);
++  ASSERT (st.ptrs[1] == buf + 1);
++  ASSERT (st.ptrs[0] == 0);
++
++  arith ();
++  ASSERT (arr[1][1] == &g);
++  ASSERT (st.names[1] == buf);
++  ASSERT (arr[0][1] == &g);
++  ASSERT (arr[0][0] == 0 && arr[1][0] == 0 && st.names[0] == 0 && st.c == 0);
++
++  ASSERT (&arr[one][1] - &arr[0][one] == 2);
++  ASSERT (*(&arr[one][0])[one] == g);
++#endif
++}

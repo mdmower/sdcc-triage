@@ -4,22 +4,24 @@ Date: Tue, 10 Nov 2026 08:19:27 -0800
 Subject: [PATCH] [bugs #3849] Return a struct value that is not a variable
  through a temporary object
 
-What held for calls (bug #3847) held for every other expression of struct or
-union type that is not a variable: *p, a[i], s.m, p->m, the value of a comma
-or assignment expression or of an inlined call. It reached the RETURN iCode
-as an address, which no code generator can return from: a segfault or an
-internal error for sm83 and z80, an unwritten object in the caller for mcs51.
+What held for calls (bug #3847) held for every other expression of
+struct or union type that is not a variable: *p, a[i], s.m, p->m, the
+value of a comma or assignment expression or of an inlined call. It
+reached the RETURN iCode as an address, which no code generator can
+return from. The result was a segfault or an internal error for sm83 and
+z80, and for mcs51 an object in the caller that was not written.
 
-Such a value is now copied to a temporary object, one for all returns of the
-function, with the tree that a struct assignment is rewritten to, and
-returned from there. The temporary is made at iCode generation like the
-result object of a call; createStructCopy() enters it in the symbol table
-while the copy is decorated, because the arguments of the memcpy call are
-copied there and a copied tree finds its symbols by name.
+Such values are now copied to a temporary object, one for all returns of
+the function, with the tree that a struct assignment is rewritten to,
+and returned from there. The temporary is made at iCode generation like
+the result object of a call. createStructCopy() enters it in the symbol
+table while the copy is decorated, because the arguments of the memcpy
+call are copied there and the symbols in the copy of a tree are looked
+up by name.
 
-Conditional expressions are left out. Their evaluation for struct operands
-is wrong by itself (bugs #4131, #4163), so mcs51 keeps refusing to return
-them instead of hiding that.
+Conditional expressions are left out. Their evaluation for struct
+operands is wrong by itself (bugs #4131, #4163), so mcs51 keeps refusing
+to return them instead of hiding that.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

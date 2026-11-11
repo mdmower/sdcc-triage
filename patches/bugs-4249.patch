@@ -4,11 +4,11 @@ Date: Tue, 10 Nov 2026 01:55:19 -0800
 Subject: [PATCH] [bugs #4249] The address of an array points to the array, not
  to its first element
 
-By the time unary & is turned into intermediate code an array operand has
-already become a pointer to its first element, and that pointer was returned
-as the result. '&array + 1' and 'p++' compared against it then stepped by
-one element. The tree is decorated with the right type, pointer to array:
-give the result that type.
+By the time unary & is turned into intermediate code an array operand
+has already become a pointer to its first element, and that pointer was
+returned as the result. '&array + 1' and 'p++' compared against it then
+stepped by one element. The tree is decorated with the right type,
+pointer to array, so give the result that type.
 
 Adds tests/bug-4249.c.
 

@@ -4,13 +4,14 @@ Date: Mon, 9 Nov 2026 23:04:19 -0800
 Subject: [PATCH] [bugs #3286] mcs51: do not give a cast result the registers
  of a spilt operand
 
-The register allocator lets the result of a cast take over the registers of
-its operand. A spilt operand can still carry the registers it had before it
-was spilt; they mean nothing by then, and taking them bypassed the check
-that keeps r0 and r1 free while something lives on the stack. The result of
-a cast from a 64-bit stack parameter ended up in r0-r3, so no pointer
-register was left to read the parameter with, and the code generator gave up
-with 'getFreePtr should never reach here'. Seen with --stack-auto.
+The register allocator lets the result of a cast take over the registers
+of its operand. Spilt operands can still have the registers they had
+before they were spilt. Those registers mean nothing by then, and the
+allocator gave them to the result without the check that keeps r0 and r1
+free while something is on the stack. The result of a cast from a 64-bit
+stack parameter ended up in r0-r3, so no pointer register was left to
+read the parameter with, and the code generator stopped with 'getFreePtr
+should never reach here'. Seen with --stack-auto.
 
 Adds tests/bug-3286.c.
 

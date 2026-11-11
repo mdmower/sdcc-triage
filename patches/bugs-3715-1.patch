@@ -4,7 +4,18 @@ Date: Tue, 10 Nov 2026 11:54:21 -0800
 Subject: [PATCH] [bugs #3715] sdcpp: answer __has_attribute and
  __has_c_attribute without identifier trees
 
-__has_attribute, __has_cpp_attribute and __has_c_attribute stopped the preprocessor with an internal compiler error ("unreachable dummy in cc1get_identifier"): c_common_has_attribute() turned the attribute name into an identifier tree, and get_identifier() and build_tree_list() are dummies in sdcpp. The lookup that would use the tree was already disabled, so the name is no longer converted; the syntax is still checked and the result is 0 for every name, which is right for sdcc: it has no __attribute__, and it ignores the standard attributes it parses (warning 284) or rejects them in front of a declaration. Two leftover debug messages on stderr are gone as well. Bugs #3844 is the same failure.
+__has_attribute, __has_cpp_attribute, and __has_c_attribute stopped the
+preprocessor with an internal compiler error ("unreachable dummy in
+cc1get_identifier"). c_common_has_attribute() turned the attribute name
+into an identifier tree, and get_identifier() and build_tree_list() are
+dummies in sdcpp.
+
+The lookup that would use the tree was already disabled, so the name is
+no longer converted. The syntax is still checked and the result is 0 for
+every name. That is right for sdcc, which has no __attribute__ and
+ignores the standard attributes it parses (warning 284) or rejects them
+in front of a declaration. Two leftover debug messages on stderr are
+gone as well. Bugs #3844 is the same failure.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

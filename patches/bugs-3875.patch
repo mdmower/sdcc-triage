@@ -3,10 +3,10 @@ From: Matt Mower <mdmower@cmphys.com>
 Date: Mon, 9 Nov 2026 22:27:57 -0800
 Subject: [PATCH] [bugs #3875] Re-enable the bug-3873 test for mcs51
 
-The test passes with --model-medium, --model-large, --model-huge and both
-stack-auto variants on current trunk, so whatever made it fail has been
-fixed since. It stays disabled only for the plain small model, where its
-data does not fit into internal RAM.
+The test passes with --model-medium, --model-large, --model-huge, and
+both stack-auto variants on current trunk, so whatever made it fail has
+been fixed since. It stays disabled only for the plain small model,
+where its data does not fit into internal RAM.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

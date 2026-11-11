@@ -4,9 +4,28 @@ Date: Tue, 10 Nov 2026 07:50:30 -0800
 Subject: [PATCH] [bugs #2948] Initialize an anonymous struct or union through
  braces of its own
 
-The members of an anonymous struct or union are promoted into the enclosing struct or union, and an initializer list is matched against that flat list of members. A union therefore initialized only the first of the members promoted out of its first alternative, both in the data image (printIvalStruct) and in the code for automatic objects (createIvalStruct). And braces around the initializers of an anonymous struct or union were taken for braces around the initializer of its first member: the other initializers in them were dropped, and the ones after them went to the wrong members ({1, {2, 3}, 4}).
+The members of an anonymous struct or union are promoted into the
+enclosing struct or union, and initializer lists are matched against
+that flat list of members. For a union, only the first of the members
+promoted out of its first alternative was therefore initialized, both in
+the data image (printIvalStruct) and in the code for automatic objects
+(createIvalStruct). And braces around the initializers of an anonymous
+struct or union were taken for braces around the initializer of its
+first member. The other initializers in them were dropped, and the ones
+after them were assigned to the wrong members ({1, {2, 3}, 4}).
 
-promoteAnonStructs() now marks the first and the last promoted member (anonopen, anonclose). unbraceAnonIlist() uses the marks to splice such a braced list into the enclosing one, with holes for the members the braces leave out, before the list is matched: in reorderIlistFull() for the data image, and in designatedIlist() for objects initialized by code, so that designators inside such braces are honoured like the others. A union whose first alternative has several members is walked like a struct, where the members of the other alternatives are skipped as aliases. There is no brace elision for array and struct members, so braces at an anonymous struct or union that starts with one, around a list that starts with a plain expression, are still read as that member's own.
+promoteAnonStructs() now marks the first and the last promoted member
+(anonopen, anonclose). unbraceAnonIlist() uses the marks to splice such
+a braced list into the enclosing one, with holes for the members the
+braces leave out, before the list is matched. This is done in
+reorderIlistFull() for the data image and in designatedIlist() for
+objects initialized by code, so that designators inside such braces are
+honored like the others. Unions whose first alternative has several
+members are walked like structs, where the members of the other
+alternatives are skipped as aliases. There is no brace elision for array
+and struct members, so braces at an anonymous struct or union that
+starts with one, around a list that starts with a plain expression, are
+still read as that member's own.
 
 gcc-torture-execute-pr87053 is enabled again.
 

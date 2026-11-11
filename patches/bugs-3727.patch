@@ -4,9 +4,9 @@ Date: Tue, 10 Nov 2026 01:50:41 -0800
 Subject: [PATCH] [bugs #3727] Propagate kills through non-dominating
  predecessors in the data flow
 
-A block's incoming expressions are those of its dominating predecessor minus
-what its other predecessors kill. That test only looked at what each such
-predecessor kills itself. For
+The incoming expressions of each block are those of its dominating
+predecessor minus what its other predecessors kill. That test only
+looked at what each such predecessor kills itself. For
 
     n1 = 0;
     if (bad)
@@ -14,14 +14,15 @@ predecessor kills itself. For
         fake ();          /* sets n1 */
     use (2 * n1);
 
-the call removes 'n1 = 0' from the loop header's incoming expressions, but
-the block after the loop is reached from the header, which contains no call,
-so 'n1 = 0' survived there and n1 was replaced by 0.
+the call removes 'n1 = 0' from the loop header's incoming expressions,
+but the block after the loop is reached from the header, which contains
+no call, so 'n1 = 0' remained there and n1 was replaced by 0.
 
-Record what is deleted during the merge in the block's killed expressions,
-which are already handed on to successors and consulted by the test.
+Record what is deleted during the merge in the block's killed
+expressions, which are already propagated to successors and consulted by
+the test.
 
-Enables the assertion in tests/bug-3727.c; it failed on mcs51, stm8 and z80.
+Enables the assertion in tests/bug-3727.c.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---

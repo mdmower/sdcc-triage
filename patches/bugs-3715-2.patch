@@ -4,7 +4,15 @@ Date: Tue, 10 Nov 2026 11:55:55 -0800
 Subject: [PATCH] [bugs #3715] sdcpp: answer __has_builtin without the
  compiler's symbol table
 
-__has_builtin stopped the preprocessor with the same kind of internal compiler error as __has_attribute ("unreachable dummy in cc1names_builtin_p"): c_common_has_builtin() asked names_builtin_p(), a dummy in sdcpp. The symbol table is in sdcc and the port is not known to the preprocessor, so the answer is now 1 for the two names that sdcc has built in for every port, __builtin_offsetof and __builtin_unreachable, and 0 otherwise. Built-in functions of single ports (__builtin_memcpy and others on the z80 family and ds390) are therefore reported as missing.
+__has_builtin stopped the preprocessor with the same kind of internal
+compiler error as __has_attribute ("unreachable dummy in
+cc1names_builtin_p"). c_common_has_builtin() called names_builtin_p(), a
+dummy in sdcpp. The symbol table is in sdcc and the preprocessor has no
+information about the port, so the answer is now 1 for the two names
+that sdcc has built in for every port, __builtin_offsetof and
+__builtin_unreachable, and 0 otherwise. Built-in functions of single
+ports (__builtin_memcpy and others on the z80 family and ds390) are
+therefore reported as missing.
 
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 ---
