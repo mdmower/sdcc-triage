@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 12:12:32 -0800
+Subject: [PATCH] [bugs #4233] Keep an explicit cast whose operand is an
+ operation
+
+decorateType removes a cast to the type that its operand already has.
+The operand of a cast is decorated with the result type of the cast, so
+under a cast to unsigned char an operation on unsigned char operands is
+done in unsigned char and has the type of the cast. Such a cast was
+removed, although the operation had its type only because of the cast.
+
+processParms decorates a copy of an argument again when the argument
+needs a conversion to the type of its parameter. The copy was decorated
+without the cast and with the result type of the parameter, so the
+operation was done in int. In
+
+    unsigned char c = 0x80;
+    void f (unsigned long x);
+
+    f ((unsigned char)(c << 1));
+
+f received 0x100. The same happened with +, -, *, ~, unary -, and the
+conditional operator, with unsigned int parameters, and with
+f ((unsigned char)(c << 1) == 0). compareTypeExact also compares the
+static flag and the storage class of the two types. Where c is static,
+or its storage class differs from that of the type of the cast, the cast
+stayed and the value was right.
+
+Remove an explicit cast only when its operand is a symbol or a literal.
+The type of these does not depend on the result type. A cast that the
+compiler added is removed as before, because the code that added it adds
+it again whenever a copy of the tree is decorated.
+
+geniCodeCast returns its operand for a cast between equal types, so the
+casts that stay generate no code.
+
+Adds tests/bug-4233.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       | 11 +++--
+ support/regression/tests/bug-4233.c | 72 +++++++++++++++++++++++++++++
+ 2 files changed, 80 insertions(+), 3 deletions(-)
+ create mode 100644 support/regression/tests/bug-4233.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 7483aae60..16aa17072 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -5590,10 +5590,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+         changePointer (LTYPE (tree));
+       checkTypeSanity (LETYPE (tree), "(cast)");
+ 
+-      /* if 'from' and 'to' are the same remove the superfluous cast,
+-       * this helps other optimizations */
++      /* If 'from' and 'to' are the same, remove the superfluous cast, which
++       * helps other optimizations. An explicit cast of an operation is kept.
++       * The operation was decorated with the result type of the cast, and
++       * that can be the only reason why it has the type of the cast. When a
++       * copy of the operation is decorated again without the cast, as
++       * processParms () does with an argument, it is done in int. */
+       if (!tree->values.cast.semDeref &&
+-          compareTypeExact (LTYPE (tree), RTYPE (tree), -1, true) == 1)
++          compareTypeExact (LTYPE (tree), RTYPE (tree), -1, true) == 1 &&
++          (IS_AST_VALUE (tree->right) || tree->values.cast.implicitCast))
+         {
+           /* mark that the explicit cast has been removed,
+            * for proper processing (no integer promotion) of explicitly typecasted variable arguments */
+diff --git a/support/regression/tests/bug-4233.c b/support/regression/tests/bug-4233.c
+new file mode 100644
+index 000000000..9bdc58a82
+--- /dev/null
++++ b/support/regression/tests/bug-4233.c
+@@ -0,0 +1,72 @@
++/* bug-4233.c
++   An explicit cast of an operation to a type smaller than int has to stay
++   in effect when the result is converted to a wider type. As an argument
++   for an unsigned long parameter, (unsigned char)(c << 1) is the low byte
++   of the shift. The cast was removed as superfluous, and the shift was
++   then done in int for the argument.
++ */
++
++#include <testfwk.h>
++
++/* Not static. For a static object the cast is not to the same type as far
++   as the compiler is concerned, and the cast is never removed. */
++unsigned char nv;
++unsigned char nh;
++unsigned char nt;
++signed char sh;
++
++unsigned long
++passLong (unsigned long x)
++{
++  return x;
++}
++
++unsigned int
++passInt (unsigned int x)
++{
++  return x;
++}
++
++long
++passSLong (long x)
++{
++  return x;
++}
++
++void
++testShift (void)
++{
++  nv = 0;
++  nh = 0x80;
++  sh = 0x40;
++
++  ASSERT (passLong ((unsigned char)(nh << 1)) == 0);
++  ASSERT (passInt ((unsigned char)(nh << 1)) == 0);
++  ASSERT (passSLong ((signed char)(sh << 2)) == 0);
++  ASSERT (passLong ((unsigned char)(nh << 1) == 0) == 1);
++  ASSERT (passLong ((unsigned char)(unsigned char)(nh << 1)) == 0);
++  ASSERT (passLong ((unsigned char)(nv ? nv : nh << 1)) == 0);
++}
++
++void
++testArith (void)
++{
++  nv = 0;
++  nh = 0x80;
++  nt = 2;
++
++  ASSERT (passLong ((unsigned char)(nh + nh)) == 0);
++  ASSERT (passLong ((unsigned char)(nv - nt)) == 0xfe);
++  ASSERT (passLong ((unsigned char)(nh * nt)) == 0);
++  ASSERT (passLong ((unsigned char)-nh) == 0x80);
++  ASSERT (passInt ((unsigned char)(nv - nt)) == 0xfe);
++}
++
++void
++testComplement (void)
++{
++  nv = 0;
++
++  ASSERT (passLong ((unsigned char)~nv) == 0xff);
++  ASSERT (passInt ((unsigned char)~nv) == 0xff);
++}
