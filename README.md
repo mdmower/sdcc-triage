@@ -16,10 +16,10 @@ Its head is `3bede865a`.
 | [No action recommended](no-action.md) | 0 |
 | [Information needed from the reporter](needs-info.md) | 0 |
 | [Trivial fixes](fix-trivial.md) | 12 |
-| [Fixes](fix.md) | 7 |
+| [Fixes](fix.md) | 8 |
 | [Fixes that need a decision](fix-decision.md) | 12 |
 | [Analyzed, not fixed](unresolved.md) | 10 |
-| [Problems without a ticket](unreported.md) | 5 |
+| [Problems without a ticket](unreported.md) | 8 |
 
 <!-- end of generated block -->
 

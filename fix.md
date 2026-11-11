@@ -4,6 +4,7 @@ The cause is identified and the change is confined to it. Each entry has a regre
 
 | Ticket | Entry | Recommended action | Evidence | Patch |
 |---|---|---|---|---|
+| [bugs #2691](https://sourceforge.net/p/sdcc/bugs/2691/) | [Internal error need pointerCode for the address of an element of a nested array of pointers](tickets/bugs/2691.md) | Apply the patch and close. | tested, r17176 | [bugs-2691.patch](patches/bugs-2691.patch) |
 | [bugs #3286](https://sourceforge.net/p/sdcc/bugs/3286/) | [mcs51: internal error in getFreePtr for casts of a 64-bit stack parameter with --stack-auto](tickets/bugs/3286.md) | Apply the patch and close. | tested, r17176 | [bugs-3286.patch](patches/bugs-3286.patch) |
 | [bugs #3727](https://sourceforge.net/p/sdcc/bugs/3727/) | [GCSE uses the value that a global had before a function call in a loop inside an if](tickets/bugs/3727.md) | Apply the patch and close. | tested, r17176 | [bugs-3727.patch](patches/bugs-3727.patch) |
 | [bugs #3847](https://sourceforge.net/p/sdcc/bugs/3847/) | [return of a call's struct value gives an internal error for z80 and writes no result for mcs51](tickets/bugs/3847.md) | Apply the patch and close. | tested, r17176 | [bugs-3847.patch](patches/bugs-3847.patch) |
