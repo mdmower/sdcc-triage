@@ -28,7 +28,7 @@ Its head is [`c8e64c0e5`](https://github.com/mdmower/sdcc/commit/c8e64c0e5c3f455
 
 The entries are about the mcs51 port and the code that mcs51 has in common with other ports: the
 front end, the optimizer, the preprocessor, the assembler, the linker, and the libraries. Tickets
-about other ports only were not examined and have no entry.
+that are only about other ports were not examined and do not have entries.
 
 ## Entries
 
@@ -38,12 +38,12 @@ the action recommended for each entry.
 Read an entry with its ticket open. Ticket text is not repeated in entries, and comments and
 attachments are identified by their position in the ticket.
 
-Evidence for entries is of two kinds:
+Entries are marked `tested` or `read`:
 
 - `tested`: the test case was compiled with a compiler built from the trunk revision given in the
   entry, and was run in ucsim where that was possible.
 - `read`: the finding is a judgment from the ticket text and the source code of that revision.
-  Nothing was compiled or run.
+  The compiler was not run.
 
 ## Patches
 
@@ -57,12 +57,13 @@ the rest of the patch. Exceptions are stated in their entries.
 
 With the whole series applied to trunk, the regression suite was run for the host, stm8, ucz80, and
 six mcs51 variants: small, medium, large, huge, small-stack-auto, and large-stack-auto. The valdiag
-suite was run for mcs51, z80, and stm8. No test failed that passes with trunk alone.
+suite was run for mcs51, z80, and stm8. Every test that passes with trunk also passes with the
+series applied.
 
 ## How this was produced
 
 The analysis, the patches, and the text were written with an AI coding assistant (Claude), which
-the owner of this repository directed. No SDCC maintainer has reviewed the patches.
+the owner of this repository directed. SDCC's maintainers have not reviewed the patches.
 
 ## License
 

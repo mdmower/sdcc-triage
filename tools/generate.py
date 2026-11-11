@@ -28,8 +28,8 @@ CATEGORIES = {
     ),
     "not-reproducible": (
         "Not reproducible",
-        "The behavior reported in the ticket could not be reproduced, and no revision with a fix "
-        "for it was identified. What was tried is listed in the entry.",
+        "The behavior reported in the ticket could not be reproduced, and a revision with a fix "
+        "for it was not identified. What was tried is listed in the entry.",
     ),
     "duplicate": (
         "Duplicates",
@@ -62,12 +62,12 @@ CATEGORIES = {
     ),
     "unresolved": (
         "Analyzed, not fixed",
-        "The problem is reproduced or located, and no patch is offered. What is known, and what a "
-        "fix would involve, is stated in the entry.",
+        "The problem is reproduced or located, and the fork does not have a patch for it. What is "
+        "known, and what a fix would involve, is stated in the entry.",
     ),
     "unreported": (
         "Problems without a ticket",
-        "Problems found during this work that have no SourceForge ticket. The entries have "
+        "Problems found during this work that do not have SourceForge tickets. The entries have "
         "reproducers.",
     ),
 }
@@ -258,7 +258,7 @@ def category_page(config, cat, entries):
     keys = sorted((k for k in entries if entries[k]["fields"]["category"] == cat), key=sort_key)
     lines = ["# %s" % title, "", intro, ""]
     if not keys:
-        lines.append("No entries.")
+        lines.append("This category is empty.")
         return "\n".join(lines) + "\n"
     has_patch = cat in FIX_CATEGORIES
     head = ["Ticket", "Entry", "Recommended action", "Evidence"] + (["Patch"] if has_patch else [])
