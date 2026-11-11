@@ -23,51 +23,52 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CATEGORIES = {
     "fixed-upstream": (
         "Already fixed in trunk",
-        "The reported behavior does not occur in trunk. Each entry names the revision that fixed it "
-        "when that revision was identified.",
+        "The behavior reported in the ticket does not occur in trunk. The revision in which it was "
+        "fixed is given in the entry when that revision was identified.",
     ),
     "not-reproducible": (
         "Not reproducible",
-        "The reported behavior could not be reproduced, and no revision that fixed it was "
-        "identified. Each entry lists what was tried.",
+        "The behavior reported in the ticket could not be reproduced, and no revision with a fix "
+        "for it was identified. What was tried is listed in the entry.",
     ),
     "duplicate": (
         "Duplicates",
-        "The ticket reports a problem that another ticket already covers.",
+        "The same problem is already reported in another ticket.",
     ),
     "no-action": (
         "No action recommended",
-        "The reported behavior is correct, or the request conflicts with the C standard or with "
-        "documented SDCC behavior. Each entry gives the reason.",
+        "The behavior reported in the ticket is correct, or the request conflicts with the C "
+        "standard or with the behavior described in SDCC's documentation. The reason is given in "
+        "the entry.",
     ),
     "needs-info": (
         "Information needed from the reporter",
-        "The ticket cannot be judged without something only the reporter has. Each entry says what "
-        "is missing.",
+        "The ticket cannot be judged without something that only the reporter has. What is missing "
+        "is stated in the entry.",
     ),
     "fix-trivial": (
         "Trivial fixes",
-        "The source change is a few lines in one place. Each entry shows the diff.",
+        "The source change is a few lines in one place. The diff is in the entry.",
     ),
     "fix": (
         "Fixes",
-        "The cause is identified and the change is confined to it. Each entry has a regression "
+        "The cause is identified and the change is confined to it. The patch includes a regression "
         "test that fails without the change.",
     ),
     "fix-decision": (
         "Fixes that need a decision",
-        "The patch works, and it contains a choice that a maintainer should confirm or change. "
-        "Each entry states the choice and the alternatives.",
+        "The fork has a patch, and the patch contains a choice that a maintainer should confirm or "
+        "change. The choice and the alternatives are stated in the entry.",
     ),
     "unresolved": (
         "Analyzed, not fixed",
-        "The problem is reproduced or located, and no patch is offered. Each entry says what is "
-        "known and what a fix would involve.",
+        "The problem is reproduced or located, and no patch is offered. What is known, and what a "
+        "fix would involve, is stated in the entry.",
     ),
     "unreported": (
         "Problems without a ticket",
-        "Problems found during this work that have no SourceForge ticket. Each entry has a "
-        "reproducer.",
+        "Problems found during this work that have no SourceForge ticket. The entries have "
+        "reproducers.",
     ),
 }
 FIX_CATEGORIES = ("fix-trivial", "fix", "fix-decision")
