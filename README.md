@@ -61,6 +61,12 @@ The analysis, the patches, and the text were written with an AI coding assistant
 repository owner directed. Every result that an entry calls `tested` comes from a compiler built
 from the named revision. The patches have not been reviewed by an SDCC maintainer.
 
+## License
+
+Each patch has the license of the SDCC files that it changes. The tests that the patches add, and
+the text and the tools of this repository, are under the GNU General Public License, version 2 or
+any later version, which is the license of the SDCC compiler sources. `COPYING` has its text.
+
 ## Regenerating
 
 `python3 tools/generate.py --fork PATH` rewrites the patches, the category pages, and the blocks
