@@ -10,9 +10,9 @@ Its head is `3bede865a`.
 
 | Category | Entries |
 |---|---|
-| [Already fixed in trunk](fixed-upstream.md) | 9 |
+| [Already fixed in trunk](fixed-upstream.md) | 12 |
 | [Not reproducible](not-reproducible.md) | 2 |
-| [Duplicates](duplicate.md) | 0 |
+| [Duplicates](duplicate.md) | 2 |
 | [No action recommended](no-action.md) | 0 |
 | [Information needed from the reporter](needs-info.md) | 0 |
 | [Trivial fixes](fix-trivial.md) | 12 |
