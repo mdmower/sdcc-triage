@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 07:42:08 -0800
+Subject: [PATCH] [local #0009] sdas8051: pass the opcode of ACALL and AJMP to
+ outrwm() unshifted
+
+Since r16924, sdas8051 wrote 00 as the opcode byte of every ACALL and AJMP. 'acall sub' at address 0 with sub at address 4 linked to 00 04 where 11 04 is correct. Programs compiled with --acall-ajmp were affected in the same way.
+
+The argument of outrwm() in machine() was changed from op to op << 8 in r16924, with other changes merged from upstream ASxxxx. outrwm() in sdas takes the opcode itself. It writes the low byte of that argument after the two address bytes, and the linker merges that byte with the upper three bits of the 11-bit address. The low byte of op << 8 is 00. machine() passes op again, as the call in sdas390 does.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ sdas/as8051/i51mch.c                  |  2 +-
+ support/regression/tests/acall_ajmp.c | 31 +++++++++++++++++++++++++++
+ 2 files changed, 32 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/acall_ajmp.c
+
+diff --git a/sdas/as8051/i51mch.c b/sdas/as8051/i51mch.c
+index e49413266..bcbca25ba 100644
+--- a/sdas/as8051/i51mch.c
++++ b/sdas/as8051/i51mch.c
+@@ -105,7 +105,7 @@ machine(struct mne *mp)
+ 		 * Top 3 bits become the MSBs of the op-code.
+ 		 */
+ 		expr(&e);
+-		outrwm(&e, R_J11, op << 8);
++		outrwm(&e, R_J11, op);
+ 		break;
+ 
+ 	case S_JMP16:
+diff --git a/support/regression/tests/acall_ajmp.c b/support/regression/tests/acall_ajmp.c
+new file mode 100644
+index 000000000..e3c2a01ac
+--- /dev/null
++++ b/support/regression/tests/acall_ajmp.c
+@@ -0,0 +1,31 @@
++/** acall and ajmp tests for mcs51.
++*/
++#include <testfwk.h>
++
++__data unsigned char path;
++
++void
++branch (void)
++{
++#ifdef __SDCC_mcs51
++  __asm
++	acall	00001$
++	ajmp	00002$
++00001$:
++	orl	_path, #0x01
++	ret
++00002$:
++	orl	_path, #0x02
++  __endasm;
++#endif
++}
++
++void
++testAcallAjmp (void)
++{
++#ifdef __SDCC_mcs51
++  path = 0;
++  branch ();
++  ASSERT (path == 0x03);
++#endif
++}

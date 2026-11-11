@@ -31,3 +31,6 @@ bugs-3715-2.patch
 bugs-3843-1.patch
 bugs-3843-2.patch
 bugs-2691.patch
+local-0009.patch
+bugs-3703.patch
+bugs-2970.patch
