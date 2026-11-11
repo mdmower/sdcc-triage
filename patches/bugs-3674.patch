@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 03:03:56 -0800
+Subject: [PATCH] [bugs #3674] Do not promote an explicitly cast variable
+ argument that is not a variable
+
+With --std-sdccXX, mcs51 (like ds390, mos6502, pic14 and pic16) passes an
+explicitly cast variable argument without integer promotion. A cast to the
+type the operand already has is removed when the tree is decorated, and the
+operand is marked with removedCast instead. processParms honoured that mark
+on symbols only, so in
+
+    vafunc (3, (uint8_t)var, (uint8_t)u8func (), (uint8_t)*p);
+
+the first argument was passed as a byte and the other two as int, and
+va_arg (ap, unsigned char) in the callee read the wrong bytes. The same
+happened for array elements and for structure members reached through a
+pointer (bug #3172).
+
+Honour the mark on any expression. Nothing else uses that part of the node
+in an expression that can be an argument, and the mark is only set where
+the source has a cast.
+
+Adds tests/bug-3674.c and enables the assertions in tests/bug-3172.c.in for
+the ports that omit the promotion; both failed on mcs51.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                          |   2 +-
+ support/regression/tests/bug-3172.c.in |   4 +-
+ support/regression/tests/bug-3674.c    | 117 +++++++++++++++++++++++++
+ 3 files changed, 119 insertions(+), 4 deletions(-)
+ create mode 100644 support/regression/tests/bug-3674.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 61e61b653..09fc159e1 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1044,7 +1044,7 @@ processParms (ast * func, value * defParm, ast ** actParm, int *parmNumber,
+       if (options.std_sdcc && (TARGET_IS_MCS51 || TARGET_IS_DS390 || TARGET_MOS6502_LIKE || TARGET_PIC_LIKE) &&
+         IFFUNC_HASVARARGS (functype) &&
+         (IS_CAST_OP (*actParm) ||
+-          (IS_AST_SYM_VALUE (*actParm) && AST_VALUES (*actParm, cast.removedCast)) ||
++          AST_VALUES (*actParm, cast.removedCast) ||
+           (IS_AST_LIT_VALUE (*actParm) && AST_VALUES (*actParm, cast.literalFromCast))))
+         {
+           /* Parameter was explicitly typecast; don't touch it. */
+diff --git a/support/regression/tests/bug-3172.c.in b/support/regression/tests/bug-3172.c.in
+index ce3092522..88548df0b 100644
+--- a/support/regression/tests/bug-3172.c.in
++++ b/support/regression/tests/bug-3172.c.in
+@@ -25,11 +25,9 @@ receive(const char *s, ...)
+ 	va_list ap;
+ 	
+ 	va_start(ap, s);
+-#if defined(__SDCC) && defined(NOPROMOTE) && !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15)
+-#if 0 // Bug #3172 not yet fixed.
++#if defined(NOPROMOTE) && (defined(__SDCC_mcs51) || defined (__SDCC_ds390) || defined (__SDCC_mos6502) || defined (__SDCC_mos65c02) || defined (__SDCC_pic14) || defined (__SDCC_pic16))
+ 	ASSERT(va_arg(ap, unsigned char) == 0x5a);
+ 	ASSERT(va_arg(ap, unsigned char) == 0xa5);
+-#endif
+ #else
+ 	ASSERT(va_arg(ap, int) == 0x5a);
+ 	ASSERT(va_arg(ap, int) == 0xa5);
+diff --git a/support/regression/tests/bug-3674.c b/support/regression/tests/bug-3674.c
+new file mode 100644
+index 000000000..620491022
+--- /dev/null
++++ b/support/regression/tests/bug-3674.c
+@@ -0,0 +1,117 @@
++/* bug-3674.c
++   Some ports, when not using --std-cXX, omit integer promotion on explicitly
++   cast variable arguments. A cast to the type the operand already has was
++   honoured for variables only: the result of a function call, a dereferenced
++   pointer, an array element or a structure member reached through a pointer
++   was promoted nevertheless (also bug #3172).
++ */
++
++#include <testfwk.h>
++
++#include <stdarg.h>
++
++#if defined(__SDCC_mcs51) || defined (__SDCC_ds390) || defined (__SDCC_mos6502) || defined (__SDCC_mos65c02) || defined (__SDCC_pic14) || defined (__SDCC_pic16)
++# define va_uchar unsigned char
++#else
++# define va_uchar int
++#endif
++
++struct s
++{
++  unsigned int i;
++  unsigned char c;
++};
++
++/* Not static: for a static object the cast is not to the same type
++   as far as the compiler is concerned. */
++unsigned char seq;
++unsigned char a[2];
++unsigned char *p;
++struct s st;
++struct s *ps;
++
++#ifndef __SDCC_pic16
++unsigned char
++next (void)
++{
++  return ++seq;
++}
++
++unsigned char
++twice (unsigned char c)
++{
++  return c * 2;
++}
++
++/* Returns 0 if the variable arguments are c0 and c1, passed as va_uchar,
++   followed by 0x1234, passed as int. */
++static unsigned char
++castArgs (unsigned char c0, unsigned char c1, ...)
++{
++  va_list ap;
++  unsigned char bad = 0;
++
++  va_start (ap, c1);
++  if (va_arg (ap, va_uchar) != c0)
++    bad |= 1;
++  if (va_arg (ap, va_uchar) != c1)
++    bad |= 2;
++  if (va_arg (ap, int) != 0x1234)
++    bad |= 4;
++  va_end (ap);
++
++  return bad;
++}
++
++/* The same for arguments that have been promoted to int. */
++static unsigned char
++plainArgs (unsigned char c0, unsigned char c1, ...)
++{
++  va_list ap;
++  unsigned char bad = 0;
++
++  va_start (ap, c1);
++  if (va_arg (ap, int) != c0)
++    bad |= 1;
++  if (va_arg (ap, int) != c1)
++    bad |= 2;
++  if (va_arg (ap, int) != 0x1234)
++    bad |= 4;
++  va_end (ap);
++
++  return bad;
++}
++#endif
++
++void
++testBug (void)
++{
++#ifndef __SDCC_pic16
++  seq = 0x10;
++  a[0] = 0x5a;
++  a[1] = 0xa5;
++  p = &a[1];
++  st.i = 0x789a;
++  st.c = 0xc3;
++  ps = &st;
++
++  /* variables: this has always worked */
++  ASSERT (castArgs (0x10, 0xc3, (unsigned char)seq, (unsigned char)st.c, 0x1234) == 0);
++
++  /* function calls */
++  ASSERT (castArgs (0x11, 0x42, (unsigned char)next (), (unsigned char)twice (0x21), 0x1234) == 0);
++  ASSERT (seq == 0x11);
++
++  /* dereferenced pointer, array element */
++  ASSERT (castArgs (0xa5, 0x5a, (unsigned char)*p, (unsigned char)a[0], 0x1234) == 0);
++  ASSERT (castArgs (0x5a, 0xa5, (unsigned char)p[-1], (unsigned char)(*p), 0x1234) == 0);
++
++  /* structure member */
++  ASSERT (castArgs (0xc3, 0xc3, (unsigned char)ps->c, (unsigned char)(*ps).c, 0x1234) == 0);
++
++  /* without a cast of their own the arguments are promoted */
++  ASSERT (plainArgs (0x12, 0xa5, next (), *p, 0x1234) == 0);
++  ASSERT (plainArgs (0xc3, 0x5a, ps->c, a[0], 0x1234) == 0);
++  ASSERT (plainArgs (0x13, 0xa6, (unsigned char)seq + 1, (unsigned char)*p + 1, 0x1234) == 0);
++#endif
++}

@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 23:05:24 -0800
+Subject: [PATCH] [bugs #3363] Re-enable the _BitInt(33) case of bitintvararg
+ for mcs51
+
+It passes on current trunk in the small and large models with and without
+--stack-auto, so the guard is no longer needed.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ support/regression/tests/bitintvararg.c.in | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/support/regression/tests/bitintvararg.c.in b/support/regression/tests/bitintvararg.c.in
+index 5045137ee..ecc869018 100644
+--- a/support/regression/tests/bitintvararg.c.in
++++ b/support/regression/tests/bitintvararg.c.in
+@@ -54,12 +54,10 @@ void
+ testBitIntVarArg(void)
+ {
+ #if __SDCC_BITINT_MAXWIDTH >= {width} // TODO: When we can regression-test in --std-c23 mode, use the standard macro from limits.h instead!
+-#if !defined(__SDCC_mcs51) || {width} != 33 // Bug #3363
+     int marker = 12;
+ 
+     ASSERT(returnFirstArg(marker, (bitinttype)0xaaaaaaaaaaaaaaaaull, (bitinttype)0x5555555555555555ull) == (bitinttype)0xaaaaaaaaaaaaaaaaull);
+     ASSERT(returnSecondArg(marker, (bitinttype)0xaaaaaaaaaaaaaaaaull, (bitinttype)0x5555555555555555ull) == (bitinttype)0x5555555555555555ull);
+ #endif
+-#endif
+ }
+ 

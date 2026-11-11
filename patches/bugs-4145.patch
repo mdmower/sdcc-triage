@@ -1,0 +1,320 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 02:43:55 -0800
+Subject: [PATCH] [bugs #4145] Do not take an expression computed from a
+ constexpr object for the object
+
+The constexpr marker is kept in the type specifier, so an expression computed from a constexpr object inherits it through its type: 'x + c', 'x ? 4 : c', '(x, c)'. The same goes for a compound literal with a constant initializer, which is made constexpr implicitly, so 'x + (int){3}' is enough. propagateConstExpr and constExprValue took every node with the marker for the object itself and read the initializer of its symbol, which a computed expression does not have: SIGSEGV. typeofOp passed the marker on to what was declared with typeof or auto from such an expression, which then was a constexpr object without a constant initializer.
+
+All three now ask for a symbol node. Nothing changes for an expression that did not crash or was not rejected before.
+
+Adds tests/bug-4145.c and valdiag/tests/bug-4145.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       |  16 ++-
+ support/regression/tests/bug-4145.c | 194 ++++++++++++++++++++++++++++
+ support/valdiag/tests/bug-4145.c    |  52 ++++++++
+ 3 files changed, 259 insertions(+), 3 deletions(-)
+ create mode 100644 support/regression/tests/bug-4145.c
+ create mode 100644 support/valdiag/tests/bug-4145.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 13bdf19ad..675b1d489 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -2232,8 +2232,9 @@ constExprValue (ast * cexpr, int check)
+           return valCastLiteral (cexpr->ftype, floatFromVal (cexpr->right->opval.val), (TYPE_TARGET_ULONGLONG) ullFromVal (cexpr->right->opval.val));
+         }
+ 
+-      /* if this is a C23 constexpr, use its value */
+-      if (IS_CONSTEXPR (cexpr->ftype))
++      /* if this is a C23 constexpr, use its value. Only a symbol is one: an
++         expression computed from one can inherit the marker through its type */
++      if (IS_AST_SYM_VALUE (cexpr) && IS_CONSTEXPR (cexpr->ftype))
+         {
+           value *ivalAsVal = list2val (AST_SYMBOL (cexpr)->ival, check);
+           value *val = valRecastLitVal (cexpr->etype, ivalAsVal);
+@@ -3875,7 +3876,9 @@ rewriteStructAssignment (ast *tree)
+ void
+ propagateConstExpr (ast **ptree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+ {
+-  if (ptree && *ptree && SPEC_CONSTEXPR ((*ptree)->etype))
++  /* Only a symbol names an object declared 'constexpr'. An expression
++     computed from one can inherit the marker through its type. */
++  if (ptree && IS_AST_SYM_VALUE (*ptree) && SPEC_CONSTEXPR ((*ptree)->etype))
+     {
+       ast *newAst = newAst_VALUE (constExprValue (*ptree, true));
+       copyAstLoc (newAst, *ptree);
+@@ -6760,6 +6763,13 @@ typeofOp (ast *tree)
+   SPEC_SCLS (spec_type) = 0;
+   SPEC_STAT (spec_type) = 0;
+   SPEC_EXTR (spec_type) = 0;
++  /* A value computed from a constexpr object can inherit the object's marker
++     through its type. That does not make what is declared here constexpr. */
++  if (IS_SPEC (type) && !IS_AST_SYM_VALUE (tree))
++    {
++      SPEC_CONSTEXPR (spec_type) = 0;
++      SPEC_IMPLICIT_CONSTEXPR (spec_type) = 0;
++    }
+   return type;
+ }
+ 
+diff --git a/support/regression/tests/bug-4145.c b/support/regression/tests/bug-4145.c
+new file mode 100644
+index 000000000..16c80e43b
+--- /dev/null
++++ b/support/regression/tests/bug-4145.c
+@@ -0,0 +1,194 @@
++/* bug-4145.c
++   The compiler crashed on expressions combining run-time values with C23
++   constexpr objects, or with compound literals that have a constant
++   initializer (which are handled the same way): an expression computed from
++   such an object inherited the object's internal constexpr marker through
++   its type, and was then taken for the object itself when the object's
++   initializer was looked up.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC
++#pragma std_c23
++#elif !defined (__STDC_VERSION__) || __STDC_VERSION__ < 202311L
++#define SKIP_C23
++#endif
++
++static int calls;
++
++static int
++count (void)
++{
++  return ++calls;
++}
++
++static int
++literalSum (int x)
++{
++  return x + (int){3};
++}
++
++static int
++literalDifference (int x)
++{
++  return (int){3} - x;
++}
++
++static int
++literalChoice (int x)
++{
++  return x ? 4 : (int){3};
++}
++
++static int
++literalNegated (int x)
++{
++  return -(x + (int){3});
++}
++
++static int
++literalComma (void)
++{
++  return (count (), (int){3});
++}
++
++static long
++literalLong (long x)
++{
++  return x + (long){70000};
++}
++
++#ifndef SKIP_C23
++constexpr int gc = 5;
++
++static int
++object (unsigned char op, int x)
++{
++  constexpr int c = 3;
++  constexpr int d = 4;
++
++  switch (op)
++    {
++    case 0:
++      return x + c;
++    case 1:
++      return c + x;
++    case 2:
++      return c - x;
++    case 3:
++      return x * c;
++    case 4:
++      return c / x;
++    case 5:
++      return x % c;
++    case 6:
++      return c << x;
++    case 7:
++      return x | c;
++    case 8:
++      return x ^ c;
++    case 9:
++      return (x + c) * 2;
++    case 10:
++      return -(x + c);
++    case 11:
++      return !(x + c);
++    case 12:
++      return x ? 4 : c;
++    case 13:
++      return x ? c : d;
++    case 14:
++      return x ? c : x;
++    case 15:
++      return x + gc;
++    case 16:
++      return x < c;
++    default:
++      return (count (), c);
++    }
++}
++
++static long
++longObject (long x)
++{
++  constexpr long c = 70000;
++  return x + c;
++}
++
++static char
++element (const char *a, int x)
++{
++  constexpr int c = 3;
++  return a[x + c];
++}
++
++static int
++stored (int x)
++{
++  constexpr int c = 3;
++  int y;
++
++  y = (x + c) + c;
++  return y;
++}
++
++static int
++inferred (int x)
++{
++  constexpr int c = 3;
++  auto y = x + c;
++  typeof (x + c) z = x;
++
++  y++;
++  z += c;
++  return y + z;
++}
++#endif
++
++void
++testBug (void)
++{
++  ASSERT (literalSum (5) == 8);
++  ASSERT (literalDifference (5) == -2);
++  ASSERT (literalChoice (5) == 4);
++  ASSERT (literalChoice (0) == 3);
++  ASSERT (literalNegated (5) == -8);
++  calls = 0;
++  ASSERT (literalComma () == 3);
++  ASSERT (calls == 1);
++  ASSERT (literalLong (-1) == 69999);
++
++#ifndef SKIP_C23
++  ASSERT (object (0, 5) == 8);
++  ASSERT (object (1, -5) == -2);
++  ASSERT (object (2, 5) == -2);
++  ASSERT (object (3, 5) == 15);
++  ASSERT (object (4, 2) == 1);
++  ASSERT (object (5, 5) == 2);
++  ASSERT (object (6, 4) == 48);
++  ASSERT (object (7, 4) == 7);
++  ASSERT (object (8, 5) == 6);
++  ASSERT (object (9, 5) == 16);
++  ASSERT (object (10, 5) == -8);
++  ASSERT (object (11, 5) == 0);
++  ASSERT (object (11, -3) == 1);
++  ASSERT (object (12, 5) == 4);
++  ASSERT (object (12, 0) == 3);
++  ASSERT (object (13, 5) == 3);
++  ASSERT (object (13, 0) == 4);
++  ASSERT (object (14, 5) == 3);
++  ASSERT (object (14, 0) == 0);
++  ASSERT (object (15, 5) == 10);
++  ASSERT (object (16, 2) == 1);
++  ASSERT (object (16, 3) == 0);
++  calls = 0;
++  ASSERT (object (17, 5) == 3);
++  ASSERT (calls == 1);
++
++  ASSERT (longObject (-1) == 69999);
++  ASSERT (element ("abcdef", 1) == 'e');
++  ASSERT (stored (5) == 11);
++  ASSERT (inferred (5) == 17);
++#endif
++}
+diff --git a/support/valdiag/tests/bug-4145.c b/support/valdiag/tests/bug-4145.c
+new file mode 100644
+index 000000000..69823a751
+--- /dev/null
++++ b/support/valdiag/tests/bug-4145.c
+@@ -0,0 +1,52 @@
++/* bug-4145.c
++   An expression computed from a constexpr object and a run-time value is not
++   a constant expression, and what is declared with its type is not a
++   constexpr object. Both used to crash the compiler.
++ */
++
++#ifdef __SDCC
++#pragma std_c23
++#endif
++
++#ifdef TEST1
++int f (int x)
++{
++  constexpr int c = 3;
++  enum { E = x + c }; /* ERROR */
++  return E;
++}
++#endif
++
++#ifdef TEST2
++int f (int x)
++{
++  constexpr int c = 3;
++  struct s
++  {
++    int a;
++    int b : x + c; /* ERROR */
++  };
++  return x;
++}
++#endif
++
++#ifdef TEST3
++int f (int x)
++{
++  constexpr int c = 3;
++  static_assert (x ? 4 : c); /* ERROR */
++  return x;
++}
++#endif
++
++#ifdef TEST4
++int f (int x)
++{
++  constexpr int c = 3;
++  typeof (x + c) y = x;
++  auto z = x ? 4 : c;
++  y += c;
++  z++;
++  return y + z + sizeof (typeof (x + c));
++}
++#endif

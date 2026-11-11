@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 11:54:21 -0800
+Subject: [PATCH] [bugs #3715] sdcpp: answer __has_attribute and
+ __has_c_attribute without identifier trees
+
+__has_attribute, __has_cpp_attribute and __has_c_attribute stopped the preprocessor with an internal compiler error ("unreachable dummy in cc1get_identifier"): c_common_has_attribute() turned the attribute name into an identifier tree, and get_identifier() and build_tree_list() are dummies in sdcpp. The lookup that would use the tree was already disabled, so the name is no longer converted; the syntax is still checked and the result is 0 for every name, which is right for sdcc: it has no __attribute__, and it ignores the standard attributes it parses (warning 284) or rejects them in front of a declaration. Two leftover debug messages on stderr are gone as well. Bugs #3844 is the same failure.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ support/cpp/gcc/c-family/c-lex.cc   |  16 +++--
+ support/regression/tests/bug-3715.c | 103 ++++++++++++++++++++++++++++
+ 2 files changed, 113 insertions(+), 6 deletions(-)
+ create mode 100644 support/regression/tests/bug-3715.c
+
+diff --git a/support/cpp/gcc/c-family/c-lex.cc b/support/cpp/gcc/c-family/c-lex.cc
+index 8a44df2d3..fbd559ef7 100644
+--- a/support/cpp/gcc/c-family/c-lex.cc
++++ b/support/cpp/gcc/c-family/c-lex.cc
+@@ -332,9 +332,15 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
+   token = get_token_no_padding (pfile);
+   if (token->type == CPP_NAME)
+     {
++      /* sdcpp: there are no identifier trees and no attribute tables here.
++	 sdcc has no __attribute__ and ignores every standard attribute it
++	 parses (warning 284), so the name is not looked up: the syntax is
++	 checked and the result is 0.  */
++#if 0 // sdcpp
+       attr_name = get_identifier ((const char *)
+ 				  cpp_token_as_text (pfile, token));
+-// sdcpp      attr_name = canonicalize_attr_name (attr_name);
++      attr_name = canonicalize_attr_name (attr_name);
++#endif // sdcpp
+       bool have_scope = false;
+       int idx = 0;
+       const cpp_token *nxt_token;
+@@ -348,12 +354,12 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
+ 	  nxt_token = get_token_no_padding (pfile);
+ 	  if (nxt_token->type == CPP_NAME)
+ 	    {
++#if 0 // sdcpp
+ 	      tree attr_ns = attr_name;
+ 	      tree attr_id
+ 		= get_identifier ((const char *)
+ 				  cpp_token_as_text (pfile, nxt_token));
+-// sdcpp	      attr_id = canonicalize_attr_name (attr_id);
+-#if 0 // sdcpp
++	      attr_id = canonicalize_attr_name (attr_id);
+ 	      if (c_dialect_cxx ())
+ 		{
+ 		  /* OpenMP attributes need special handling.  */
+@@ -363,11 +369,11 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
+ 			  || is_attribute_p ("sequence", attr_id)))
+ 		    result = 1;
+ 		}
+-#endif // sdcpp
+ 	      if (result)
+ 		attr_name = NULL_TREE;
+ 	      else
+ 		attr_name = build_tree_list (attr_ns, attr_id);
++#endif // sdcpp
+ 	    }
+ 	  else
+ 	    {
+@@ -378,7 +384,6 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
+ 	}
+       else
+ 	{
+-	   fprintf(stderr, "incomplete, something with attributes\n");
+ #if 0 // sdcpp
+ 	  /* Some standard attributes need special handling.  */
+ 	  if (c_dialect_cxx ())
+@@ -412,7 +417,6 @@ c_common_has_attribute (cpp_reader *pfile, bool std_syntax)
+ 	}
+       if (attr_name && (have_scope || !std_syntax))
+ 	{
+-	   fprintf(stderr, "incomplete, something with attrib\n");
+ #if 0 // sdcpp
+ 	  init_attributes ();
+ 	  const struct attribute_spec *attr = lookup_attribute_spec (attr_name);
+diff --git a/support/regression/tests/bug-3715.c b/support/regression/tests/bug-3715.c
+new file mode 100644
+index 000000000..fafde374f
+--- /dev/null
++++ b/support/regression/tests/bug-3715.c
+@@ -0,0 +1,103 @@
++/* bug-3715.c
++   __has_attribute, __has_cpp_attribute and __has_c_attribute stopped the
++   preprocessor with an internal compiler error. It asked the compiler proper
++   for the identifier of the attribute, which is a dummy in sdcpp. Bug #3844
++   is the same failure.
++ */
++
++#include <testfwk.h>
++
++/* Bug #3844, the fallback from the Clang documentation. */
++#ifndef __has_attribute
++#define __has_attribute(x) 0
++#endif
++
++#if __has_attribute(always_inline)
++#define ATTR_ALWAYS_INLINE __attribute__((always_inline))
++#else
++#define ATTR_ALWAYS_INLINE
++#endif
++
++/* Bug #3715, a header that asks for one attribute after the other. */
++#if defined(__has_attribute)
++#  if __has_attribute(unused)
++#    define ATTR_UNUSED __attribute__((unused))
++#  endif
++#  if !defined(ATTR_NODISCARD) && __has_attribute(warn_unused_result)
++#    define ATTR_NODISCARD __attribute__((warn_unused_result))
++#  endif
++#endif
++
++/* The standard form. */
++#if !defined(ATTR_NODISCARD) && defined(__has_c_attribute)
++#  if __has_c_attribute(nodiscard)
++#    define ATTR_NODISCARD [[nodiscard]]
++#  endif
++#endif
++
++#ifndef ATTR_UNUSED
++#  define ATTR_UNUSED
++#endif
++#ifndef ATTR_NODISCARD
++#  define ATTR_NODISCARD
++#endif
++
++/* An attribute that no compiler has. */
++#if __has_attribute(sdcc_bug_3715) || __has_attribute (__sdcc_bug_3715__)
++#  define UNKNOWN_GNU 1
++#else
++#  define UNKNOWN_GNU 0
++#endif
++
++#ifdef __has_cpp_attribute
++#  if __has_cpp_attribute(sdcc_bug_3715)
++#    define UNKNOWN_CPP 1
++#  endif
++#endif
++#ifndef UNKNOWN_CPP
++#  define UNKNOWN_CPP 0
++#endif
++
++#ifdef __has_c_attribute
++#  if __has_c_attribute(sdcc_bug_3715) || __has_c_attribute ( sdcc_bug_3715 )
++#    define UNKNOWN_STD 1
++#  endif
++/* An attribute prefix needs the scope token of C23. */
++#  if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
++#    if __has_c_attribute(sdcc_bug_3715::unknown)
++#      define UNKNOWN_STD 1
++#    endif
++#  endif
++#endif
++#ifndef UNKNOWN_STD
++#  define UNKNOWN_STD 0
++#endif
++
++ATTR_NODISCARD static unsigned char
++three (void)
++{
++  return 3;
++}
++
++static inline ATTR_ALWAYS_INLINE unsigned char
++twice (unsigned char c)
++{
++  return c * 2;
++}
++
++static unsigned char
++first (unsigned char a, ATTR_UNUSED unsigned char b)
++{
++  return a;
++}
++
++void
++testBug (void)
++{
++  ASSERT (twice (three ()) == 6);
++  ASSERT (first (4, 5) == 4);
++
++  ASSERT (!UNKNOWN_GNU);
++  ASSERT (!UNKNOWN_CPP);
++  ASSERT (!UNKNOWN_STD);
++}

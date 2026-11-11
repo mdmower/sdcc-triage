@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 01:55:19 -0800
+Subject: [PATCH] [bugs #4248] Initialize a compound literal in a declaration's
+ initializer only once
+
+gatherAutoInit walks a block's symbols and, for each initializer, appends
+the temporary symbols of the compound literals it contains to the same
+chain and initializes them at once, ahead of the declaration that uses
+them. The walk then reached those symbols itself. One whose initializer is
+kept for compile-time evaluation was initialized a second time, after the
+declaration:
+
+    unsigned *const p = init (&(unsigned){0});
+
+zeroed the literal again after init() had stored into it.
+
+Stop the walk at the symbol that was last when it started.
+
+Adds tests/bug-4248.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       | 10 ++++++++-
+ support/regression/tests/bug-4248.c | 32 +++++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-4248.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 1072e7362..6d2fa180b 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1840,10 +1840,18 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
+   ast *init = NULL;
+   ast *work;
+   symbol *sym;
++  symbol *last;
+   int oldInitMode = inInitMode;
+ 
++  /* The temporary symbols of compound literals are appended to this chain while it is walked,
++     and initialized by the recursive call below at that moment. The walk must not reach them:
++     one that keeps its initializer (constexpr) would be initialized a second time, after the
++     declaration that uses it. */
++  for (last = autoChain; last && last->next; last = last->next)
++    ;
++
+   inInitMode = 1;
+-  for (sym = autoChain; sym; sym = sym->next)
++  for (sym = autoChain; sym; sym = (sym == last) ? NULL : sym->next)
+     {
+       if (!sym->ival)
+         continue;
+diff --git a/support/regression/tests/bug-4248.c b/support/regression/tests/bug-4248.c
+new file mode 100644
+index 000000000..dd6567218
+--- /dev/null
++++ b/support/regression/tests/bug-4248.c
+@@ -0,0 +1,32 @@
++/* bug-4248.c
++   A compound literal whose address is passed to a function in the
++   initializer of a declaration was initialized a second time after the call,
++   overwriting what the function had stored in it.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC
++#pragma std_c99
++#endif
++
++static unsigned *
++init (unsigned *p)
++{
++  *p = 42;
++  return p;
++}
++
++static unsigned
++test (void)
++{
++  unsigned *const p = init (&(unsigned){0});
++
++  return *p;
++}
++
++void
++testBug (void)
++{
++  ASSERT (test () == 42);
++}

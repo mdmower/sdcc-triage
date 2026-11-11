@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 22:43:56 -0800
+Subject: [PATCH] [bugs #3836] Use the generic pointer as the common type of a
+ generic and a specific pointer
+
+computeType took the left operand's type whenever it was a pointer. With a
+pointer into a specific address space on the left and a generic pointer on
+the right, as in '&local != p' on mcs51, the right operand then had to be
+converted implicitly from generic to specific, which is an error (129). The
+same expression with the operands swapped compiled.
+
+A generic pointer can represent the specific one but not the other way
+round, so let it prevail on either side. Function pointers keep the old
+rule.
+
+Re-enables tests/bug-3830.c for mcs51 (it stays disabled for ds390, which is
+not built or tested here) and adds tests/bug-3836.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCsymt.c                      |  3 ++
+ support/regression/tests/bug-3830.c |  4 +-
+ support/regression/tests/bug-3836.c | 71 +++++++++++++++++++++++++++++
+ 3 files changed, 76 insertions(+), 2 deletions(-)
+ create mode 100644 support/regression/tests/bug-3836.c
+
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index a853eb185..6c5ca6202 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -2867,6 +2867,9 @@ computeType (sym_link * type1, sym_link * type2, RESULT_TYPE resultType, int op)
+   /* If difference between pointers or arrays then the result is a ptrdiff */
+   else if ((op == '-') && (IS_PTR (type1) || IS_ARRAY (type1)) && (IS_PTR (type2) || IS_ARRAY (type2)))
+     rType = newPtrDiffLink();
++  /* of two object pointers, a generic pointer can represent the other one, but not the other way round */
++  else if (IS_PTR (type1) && !IS_GENPTR (type1) && !IS_FUNCPTR (type1) && IS_GENPTR (type2) && !IS_FUNCPTR (type2))
++    rType = copyLinkChain (type2);
+   /* if one of them is a pointer or array then that prevails */
+   else if (IS_PTR (type1) || IS_ARRAY (type1))
+     rType = copyLinkChain (type1);
+diff --git a/support/regression/tests/bug-3830.c b/support/regression/tests/bug-3830.c
+index 4c2d14581..774313dc3 100644
+--- a/support/regression/tests/bug-3830.c
++++ b/support/regression/tests/bug-3830.c
+@@ -3,7 +3,7 @@
+ 
+ #include <testfwk.h>
+ 
+-#if !defined(__SDCC_mcs51) && !defined(__SDCC_ds390) // Bug #3836.
++#if !defined(__SDCC_ds390) // Bug #3836.
+ int m(void) {
+     char var = 'A'; // Value does not matter
+     char* null = 0x0; // Value does not matter
+@@ -16,7 +16,7 @@ int m(void) {
+ 
+ void testBug(void)
+ {
+-#if !defined(__SDCC_mcs51) && !defined(__SDCC_ds390) // Bug #3836.
++#if !defined(__SDCC_ds390) // Bug #3836.
+     ASSERT(m());
+ #endif
+ }
+diff --git a/support/regression/tests/bug-3836.c b/support/regression/tests/bug-3836.c
+new file mode 100644
+index 000000000..eb2afffa5
+--- /dev/null
++++ b/support/regression/tests/bug-3836.c
+@@ -0,0 +1,71 @@
++/* bug-3836.c
++   Comparing a pointer into a specific address space with a generic pointer
++   was rejected (error 129) when the generic pointer was the right operand:
++   the common type was always taken from the left operand, and a generic
++   pointer cannot be converted implicitly to a more specific one.
++ */
++
++#include <testfwk.h>
++
++#if defined(__SDCC_mcs51)
++char __xdata xvar;
++char __xdata *xp = &xvar;
++#else
++char xvar;
++char *xp = &xvar;
++#endif
++
++char other;
++
++int
++addrLeft (char *g)
++{
++  char var = 'A';
++  if (&var != g)
++    return 1;
++  return 0;
++}
++
++int
++addrRight (char *g)
++{
++  char var = 'A';
++  return g == &var;
++}
++
++int
++specificLeft (char *g)
++{
++  return xp == g;
++}
++
++int
++specificRight (char *g)
++{
++  return g == xp;
++}
++
++char *
++conditional (char c, char *g)
++{
++  return c ? xp : g;
++}
++
++void
++testBug (void)
++{
++  char *null = 0;
++
++  ASSERT (addrLeft (null) == 1);
++  ASSERT (addrLeft (&other) == 1);
++  ASSERT (addrRight (&other) == 0);
++
++  ASSERT (specificLeft (&xvar) == 1);
++  ASSERT (specificLeft (&other) == 0);
++  ASSERT (specificLeft (null) == 0);
++  ASSERT (specificRight (&xvar) == 1);
++  ASSERT (specificRight (&other) == 0);
++
++  ASSERT (conditional (1, &other) == &xvar);
++  ASSERT (conditional (0, &other) == &other);
++}

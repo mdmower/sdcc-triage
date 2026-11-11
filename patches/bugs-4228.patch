@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 08:22:07 -0800
+Subject: [PATCH] [bugs #4228] Keep the tree that decorating a checked
+ initializer returns
+
+prepareDeclarationSymbol (constexpr objects) and the compound literal rule ask constExprTree whether the first initializer is a constant expression. constExprTree decorates the tree it is given and returns only a truth value, so the tree decorateType returns was dropped. Where decoration replaces the root, as it does for _Generic and for a conditional operator with a constant condition or equal operands, the initializer list kept the old root, which is marked decorated and has no type. Initializing the object from it gave 'indirections to different types assignment' from type 'void', then a validateLink internal error or a SIGSEGV:
+
+    constexpr int object = _Generic (1, int: 1, default: 1.0);
+    constexpr int object = 1 ? 2 : 3;
+    return (int){1 ? 2 : 3};
+
+The new constExprIlist decorates the first expression of the list in place, as resolveIvalSym does, and then checks it. An initializer whose root is not replaced is decorated exactly as before, so no generated code changes.
+
+A bit-field width was evaluated twice with constExprValue, which drops the returned tree in the same way, so 'int a : 1 ? 3 : 4;' was rejected as not constant. It is evaluated once now.
+
+Adds tests/bug-4228.c and valdiag/tests/bug-4228.c; both failed before.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCC.y                          |  12 +--
+ src/SDCCast.c                       |  28 +++++++
+ src/SDCCast.h                       |   1 +
+ src/SDCCsymt.c                      |   2 +-
+ support/regression/tests/bug-4228.c | 109 ++++++++++++++++++++++++++++
+ support/valdiag/tests/bug-4228.c    |  72 ++++++++++++++++++
+ 6 files changed, 218 insertions(+), 6 deletions(-)
+ create mode 100644 support/regression/tests/bug-4228.c
+ create mode 100644 support/valdiag/tests/bug-4228.c
+
+diff --git a/src/SDCC.y b/src/SDCC.y
+index f677b7839..245e01282 100644
+--- a/src/SDCC.y
++++ b/src/SDCC.y
+@@ -262,7 +262,7 @@ postfix_expression
+                            6.7.2p6), while a compound literal without a storage class has the
+                            type written in it and nothing more (C11 6.5.2.5p4). */
+                         sym1->etype = getSpec(sym1->type);
+-                        if (constExprTree(list2expr(sym1->ival)))
++                        if (constExprIlist(sym1->ival))
+                           {
+                             SPEC_CONSTEXPR(sym1->etype) = 1;
+                             SPEC_IMPLICIT_CONSTEXPR(sym1->etype) = 1;
+@@ -1093,9 +1093,10 @@ member_declarator
+    | ':' constant_expr
+         {
+           unsigned int bitsize;
++          value *val = constExprValue($2, true);
+           $$ = newSymbol (genSymName(NestLevel), NestLevel);
+-          bitsize = (unsigned int) ulFromVal(constExprValue($2, true));
+-          if (floatFromVal (constExprValue($2, true)) < 0)
++          bitsize = (unsigned int) ulFromVal(val);
++          if (floatFromVal (val) < 0)
+               werror (E_NEGATIVE_BITFLD_SIZE);
+           else if (!bitsize)
+               bitsize = BITVAR_PAD;
+@@ -1105,8 +1106,9 @@ member_declarator
+    | declarator ':' constant_expr
+         {
+           unsigned int bitsize;
+-          bitsize = (unsigned int) ulFromVal(constExprValue($3, true));
+-          if (floatFromVal (constExprValue($3, true)) < 0)
++          value *val = constExprValue($3, true);
++          bitsize = (unsigned int) ulFromVal(val);
++          if (floatFromVal (val) < 0)
+               werror (E_NEGATIVE_BITFLD_SIZE);
+           else if (!bitsize)
+             {
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index acf1558a8..e48df1739 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -2333,6 +2333,34 @@ constExprTree (ast *cexpr)
+   return false;
+ }
+ 
++/*-------------------------------------------------------------*/
++/* constExprIlist - returns true if the first expression in    */
++/*                  the initializer list is a constant         */
++/*                  expression                                 */
++/*-------------------------------------------------------------*/
++bool
++constExprIlist (initList *ilist)
++{
++  if (!ilist)
++    {
++      return true;
++    }
++
++  assert (ilist->type != INIT_HOLE);
++
++  if (ilist->type == INIT_DEEP)
++    {
++      return constExprIlist (ilist->init.deep);
++    }
++
++  /* The list is evaluated again later, and decorating an expression can
++     replace its root (a conditional operator with a constant condition,
++     _Generic): keep the result. */
++  ilist->init.node = decorateType (resolveSymbols (ilist->init.node), RESULT_TYPE_NONE, true);
++
++  return constExprTree (ilist->init.node);
++}
++
+ /*-----------------------------------------------------------------*/
+ /* constExprValue - returns the value of a constant expression     */
+ /*                  or NULL if it is not a constant expression     */
+diff --git a/src/SDCCast.h b/src/SDCCast.h
+index 55fd649b4..540df19e9 100644
+--- a/src/SDCCast.h
++++ b/src/SDCCast.h
+@@ -236,6 +236,7 @@ ast *createFor (symbol *, symbol *, symbol *, symbol *, ast *, ast *, ast *, ast
+ void eval2icode (ast *);
+ value *constExprValue (ast *, int);
+ bool constExprTree (ast *);
++bool constExprIlist (initList *);
+ int setAstFileLine (ast *tree, const char *filename, int lineno);
+ symbol *funcOfType (const char *name, sym_link *rtype, sym_link *argtype, int nArgs, int rent);
+ symbol *funcOfType2 (const char *name, sym_link *rtype, sym_link *largtype, sym_link *rargtype, int rent);
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index 8ca2e12b5..fafa525aa 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -6159,7 +6159,7 @@ prepareDeclarationSymbol (attribute *attr, sym_link *declSpecs, symbol *initDecl
+         if (IS_PTR (l0))
+           break;
+       /* perform sanity checks concerning constexpr initialization */
+-      if (IS_CONSTEXPR (declSpecs) && (sym->ival == NULL || !constExprTree (list2expr (sym->ival))))
++      if (IS_CONSTEXPR (declSpecs) && (sym->ival == NULL || !constExprIlist (sym->ival)))
+         {
+           /* constexpr must be initialized with a constant expression (duh!) */
+           werror (sym->ival ? E_CONST_EXPECTED : E_CONSTEXPR_WITHOUT_INIT);
+diff --git a/support/regression/tests/bug-4228.c b/support/regression/tests/bug-4228.c
+new file mode 100644
+index 000000000..3abfac653
+--- /dev/null
++++ b/support/regression/tests/bug-4228.c
+@@ -0,0 +1,109 @@
++/* bug-4228.c
++   The check whether an initializer is a constant expression decorated the
++   stored initializer and dropped the tree that decoration returned. Where
++   decoration replaces the root of the expression (a conditional operator
++   with a constant condition, _Generic), the object was later initialized
++   from the old root, which has no type. That broke constexpr objects and
++   compound literals. A bit-field width was evaluated twice, the second time
++   from the old root.
++ */
++
++#include <testfwk.h>
++
++#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
++#define HAVE_GENERIC
++#endif
++
++struct pair
++{
++  int a;
++  int b;
++};
++
++struct bits
++{
++  unsigned int a : 1 ? 3 : 4;
++  unsigned int : 0 ? 3 : 2;
++  unsigned int b : 0 ? 3 : 5;
++#ifdef HAVE_GENERIC
++  unsigned int c : _Generic (1, int : 6, default : 1.0);
++#endif
++};
++
++static int x = 5;
++
++#if defined(__SDCC)
++_Pragma("std_c23")
++#define HAVE_CONSTEXPR
++#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
++#define HAVE_CONSTEXPR
++#endif
++
++#ifdef HAVE_CONSTEXPR
++constexpr int fileGeneric = _Generic (1, int : 7, default : 1.0);
++constexpr int fileDefault = _Generic (1, float : 1.0f, default : 8);
++constexpr int fileCond = 1 ? 9 : 3;
++constexpr int fileSum = fileGeneric + fileCond;
++char fileArray[fileGeneric];
++#endif
++
++void
++testConstexpr (void)
++{
++#ifdef HAVE_CONSTEXPR
++  constexpr int generic = _Generic (1, int : 13, default : 1.0);
++  constexpr int nested = _Generic (1, int : _Generic (1L, long : 17, default : 1.0), default : 2.0);
++  constexpr int cond = 0 ? 1 : 15;
++  constexpr int previous = _Generic (1, int : generic, default : 1.0);
++  char array[generic];
++
++  ASSERT (fileGeneric == 7);
++  ASSERT (fileDefault == 8);
++  ASSERT (fileCond == 9);
++  ASSERT (fileSum == 16);
++  ASSERT (sizeof (fileArray) == 7);
++
++  ASSERT (generic == 13);
++  ASSERT (nested == 17);
++  ASSERT (cond == 15);
++  ASSERT (previous == 13);
++  ASSERT (generic + cond == 28);
++  ASSERT (sizeof (array) == 13);
++#endif
++}
++
++void
++testCompoundLiteral (void)
++{
++  struct pair v = (struct pair){1 ? 2 : 3, 4};
++
++  ASSERT (v.a == 2);
++  ASSERT (v.b == 4);
++
++  ASSERT ((int){1 ? 2 : 3} == 2);
++  ASSERT ((int){0 ? x : 3} == 3);
++  ASSERT ((int){1 ? x : 3} == 5);
++  ASSERT (*(int *){1 ? &x : 0} == 5);
++
++#ifdef HAVE_GENERIC
++  ASSERT ((int){_Generic (1, int : 27, default : 1.0)} == 27);
++  ASSERT ((int){_Generic (1, float : 1.0f, default : 29)} == 29);
++  ASSERT ((int){_Generic (1, int : x, default : 1.0)} == 5);
++#endif
++}
++
++void
++testBitfieldWidth (void)
++{
++  struct bits s;
++
++  s.a = 0xff;
++  s.b = 0xff;
++  ASSERT (s.a == 7);
++  ASSERT (s.b == 31);
++
++#ifdef HAVE_GENERIC
++  s.c = 0xff;
++  ASSERT (s.c == 63);
++#endif
++}
+diff --git a/support/valdiag/tests/bug-4228.c b/support/valdiag/tests/bug-4228.c
+new file mode 100644
+index 000000000..d941636bd
+--- /dev/null
++++ b/support/valdiag/tests/bug-4228.c
+@@ -0,0 +1,72 @@
++/* bug-4228.c
++
++   An initializer whose expression is replaced when its type is worked out
++   (_Generic, a conditional operator with a constant condition) was rejected
++   as an assignment from type 'void', followed by an internal error or a
++   crash, when it initialized a constexpr object or a compound literal. A
++   bit-field width of that kind was rejected as not constant.
++ */
++
++#ifdef __SDCC
++#pragma std_c23
++#elif !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
++#define SKIP_C23
++#endif
++
++#ifndef SKIP_C23
++#ifdef TEST1
++constexpr int object = _Generic (1, int: 1, default: 1.0);
++#endif
++
++#ifdef TEST2
++constexpr int object = 1 ? 2 : 3;
++int array[object];
++#endif
++
++#ifdef TEST3
++int test (void)
++{
++  constexpr int object = _Generic (1, int: 6, default: 1.0);
++  int array[object];
++  _Static_assert (sizeof array == 6 * sizeof (int), "constant array bound");
++  array[0] = object;
++  return array[0];
++}
++#endif
++
++/* An initializer that is not constant is still found. */
++#ifdef TEST4
++int nonconstant;
++constexpr int object = _Generic (1, int: nonconstant, default: 1); /* ERROR */
++#endif
++
++#ifdef TEST5
++int nonconstant;
++constexpr int object = 1 ? nonconstant : 3; /* ERROR */
++#endif
++#endif
++
++#ifdef TEST6
++int x;
++
++int test (void)
++{
++  return (int){1 ? 2 : 3} + (int){1 ? x : 3} + (int){x ? 4 : 4};
++}
++#endif
++
++#ifdef TEST7
++struct s
++{
++  int a : 1 ? 3 : 4;
++  int : 0 ? 3 : 2;
++};
++#endif
++
++/* The value of the width is still checked. */
++#ifdef TEST8
++struct s
++{
++  int a : 0 ? 3 : -1; /* ERROR */
++};
++#endif

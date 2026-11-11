@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 08:20:17 -0800
+Subject: [PATCH] [bugs #4157] Return a constant struct object from the object,
+ not from its first initializer
+
+A return statement replaced an object declared constexpr by its value. For
+a struct or union that value is the first initializer alone, so the function
+returned nothing useful. Every compound literal whose first initializer is a
+constant is marked constexpr implicitly and was hit as well: the function
+returned (struct s){1, f ()} wrongly, but (struct s){f (), 1} correctly.
+
+A struct or union is returned from its object, so leave the expression of
+the return statement alone for these types.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       |   4 +-
+ support/regression/tests/bug-4157.c | 104 ++++++++++++++++++++++++++++
+ 2 files changed, 107 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-4157.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 440d68759..1277a72a5 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -6709,7 +6709,9 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+ 
+           typecompat = compareType (currFunc->type->next, RTYPE (tree), false);
+ 
+-          propagateConstExpr (&tree->right, resultType, reduceTypeAllowed);
++          /* a struct or union is returned from its object: do not replace that by a value */
++          if (!IS_STRUCT (RTYPE (tree)))
++            propagateConstExpr (&tree->right, resultType, reduceTypeAllowed);
+ 
+           /* Report each atomic or nested qualifier mismatch once. */
+           if (!diagnoseDissimilarPtrTargetTypes (currFunc->type->next,
+diff --git a/support/regression/tests/bug-4157.c b/support/regression/tests/bug-4157.c
+new file mode 100644
+index 000000000..be7e7264b
+--- /dev/null
++++ b/support/regression/tests/bug-4157.c
+@@ -0,0 +1,104 @@
++/* bug-4157.c
++   A compound literal of struct type whose first initializer is a constant
++   was not returned from a function: the return statement took the literal
++   for a constant expression and replaced it by the value of that initializer.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC
++#pragma std_c23
++#elif !defined (__STDC_VERSION__) || __STDC_VERSION__ < 202311L
++#define SKIP_C23
++#endif
++
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++struct s
++{
++  unsigned char a, b;
++};
++
++struct t
++{
++  int i;
++  unsigned char c;
++};
++
++volatile unsigned char src = 2;
++
++unsigned char
++f (void)
++{
++  return src;
++}
++
++struct s
++constant_first (void)
++{
++  return (struct s){1, f ()};
++}
++
++struct s
++call_first (void)
++{
++  return (struct s){f (), 1};
++}
++
++struct s
++constants (void)
++{
++  return (struct s){3, 4};
++}
++
++struct t
++wider (unsigned char c)
++{
++  if (c)
++    return (struct t){0x1234, 0x56};
++  return (struct t){0x789a, c};
++}
++
++#ifndef SKIP_C23
++constexpr struct t ct = {0x2468, 0x7b};
++
++struct t
++object (void)
++{
++  return ct;
++}
++#endif
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++  struct s r = {0, 0};
++  struct t w;
++
++  r = constant_first ();
++  ASSERT (r.a == 1);
++  ASSERT (r.b == 2);
++
++  r = call_first ();
++  ASSERT (r.a == 2);
++  ASSERT (r.b == 1);
++
++  r = constants ();
++  ASSERT (r.a == 3);
++  ASSERT (r.b == 4);
++
++  w = wider (1);
++  ASSERT (w.i == 0x1234);
++  ASSERT (w.c == 0x56);
++  w = wider (0);
++  ASSERT (w.i == 0x789a);
++  ASSERT (w.c == 0);
++
++#ifndef SKIP_C23
++  w = object ();
++  ASSERT (w.i == 0x2468);
++  ASSERT (w.c == 0x7b);
++#endif
++#endif
++}

@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 23:04:19 -0800
+Subject: [PATCH] [bugs #3286] mcs51: do not give a cast result the registers
+ of a spilt operand
+
+The register allocator lets the result of a cast take over the registers of
+its operand. A spilt operand can still carry the registers it had before it
+was spilt; they mean nothing by then, and taking them bypassed the check
+that keeps r0 and r1 free while something lives on the stack. The result of
+a cast from a 64-bit stack parameter ended up in r0-r3, so no pointer
+register was left to read the parameter with, and the code generator gave up
+with 'getFreePtr should never reach here'. Seen with --stack-auto.
+
+Adds tests/bug-3286.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/ralloc.c                  |  6 ++-
+ support/regression/tests/bug-3286.c | 60 +++++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+), 2 deletions(-)
+ create mode 100644 support/regression/tests/bug-3286.c
+
+diff --git a/src/mcs51/ralloc.c b/src/mcs51/ralloc.c
+index 0c69973b7..3e32503f0 100644
+--- a/src/mcs51/ralloc.c
++++ b/src/mcs51/ralloc.c
+@@ -1454,7 +1454,9 @@ serialRegAssign (eBBlock ** ebbs, int count)
+                         {
+                           symbol *right = OP_SYMBOL (IC_RIGHT (ic));
+ 
+-                          if (right->regs[j] && (right->regType != REG_BIT))
++                          /* A spilt operand can still carry the registers it once had. They mean
++                             nothing now, and taking r0 or r1 from them would bypass mcs51_ptrRegReq. */
++                          if (!right->isspilt && right->regs[j] && (right->regType != REG_BIT))
+                             sym->regs[j] = allocThisReg (right->regs[j]);
+                         }
+                       if (!sym->regs[j])
+@@ -1622,7 +1624,7 @@ fillGaps (void)
+                 {
+                   symbol *right = OP_SYMBOL (IC_RIGHT (ic));
+ 
+-                  if (right->regs[i] && right->regs[i]->type != REG_BIT)
++                  if (!right->isspilt && right->regs[i] && right->regs[i]->type != REG_BIT)
+                     sym->regs[i] = allocThisReg (right->regs[i]);
+                 }
+               if (!sym->regs[i])
+diff --git a/support/regression/tests/bug-3286.c b/support/regression/tests/bug-3286.c
+new file mode 100644
+index 000000000..d35c95206
+--- /dev/null
++++ b/support/regression/tests/bug-3286.c
+@@ -0,0 +1,60 @@
++/* bug-3286.c
++   An internal error in the mcs51 code generator ("getFreePtr should never
++   reach here") with --stack-auto: the result of a cast from a 64-bit stack
++   parameter was given r0 and r1, the registers its spilt operand once had,
++   leaving no pointer register to read the operand with.
++ */
++
++#include <testfwk.h>
++
++#include <stdint.h>
++
++#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) // Lack of memory
++uint32_t g_x;
++unsigned char calls;
++
++uint8_t
++func_2 (void)
++{
++  return 1;
++}
++
++void
++func_1 (void)
++{
++  calls++;
++}
++
++void
++func_0 (uint64_t x)
++{
++  if (func_2 ())
++    {
++      if (g_x == 0)
++        g_x = (uint32_t)x | 1;
++
++      if ((uint32_t)x - g_x > 10)
++        func_1 ();
++    }
++}
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) // Lack of memory
++  g_x = 0;
++  calls = 0;
++
++  func_0 (0x0123456789abcde0ull);
++  ASSERT (g_x == 0x89abcde1ul);
++  ASSERT (calls == 1); /* 0x89abcde0 - 0x89abcde1 wraps around */
++
++  func_0 (0xffffffff89abcdf0ull);
++  ASSERT (g_x == 0x89abcde1ul);
++  ASSERT (calls == 2);
++
++  func_0 (0x89abcde5ull);
++  ASSERT (calls == 2);
++#endif
++}

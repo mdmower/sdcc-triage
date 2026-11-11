@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 02:56:02 -0800
+Subject: [PATCH] [bugs #3645] Do not take a code-memory array for a string
+ literal initializer
+
+createIvalCharPtr recognized a string literal initializing a character array by its storage class (S_CODE) alone. Any other array object in code memory, such as a const array, matched too; the compiler then read the characters of a string that is not there (SIGSEGV) or failed the isstrlit assertion in freeStringSymbol. The initializer now also has to be a string literal symbol, so the invalid initialization falls through to the existing diagnostics (error 69 without braces, error 47 with braces).
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                    |  5 +-
+ support/valdiag/tests/bug-3645.c | 79 ++++++++++++++++++++++++++++++++
+ 2 files changed, 83 insertions(+), 1 deletion(-)
+ create mode 100644 support/valdiag/tests/bug-3645.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 675b1d489..61e61b653 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1672,7 +1672,10 @@ createIvalCharPtr (ast * sym, sym_link * type, ast * iexpr, ast * rootVal)
+       return decorateType (resolveSymbols (rast), RESULT_TYPE_NONE, true);
+     }
+ 
+-  if ((IS_LITERAL (iexpr->etype) || (IS_SPEC (iexpr->etype) && SPEC_SCLS (iexpr->etype) == S_CODE)) && IS_ARRAY (iexpr->ftype))
++  /* Only a string literal initializes the array as a whole. Any other array */
++  /* in code memory has the same storage class, but no characters to copy.   */
++  if (IS_AST_SYM_VALUE (iexpr) && AST_SYMBOL (iexpr)->isstrlit &&
++      (IS_LITERAL (iexpr->etype) || (IS_SPEC (iexpr->etype) && SPEC_SCLS (iexpr->etype) == S_CODE)) && IS_ARRAY (iexpr->ftype))
+     {
+       /* for each character generate an assignment */
+       /* to the array element */
+diff --git a/support/valdiag/tests/bug-3645.c b/support/valdiag/tests/bug-3645.c
+new file mode 100644
+index 000000000..dcc82d1cb
+--- /dev/null
++++ b/support/valdiag/tests/bug-3645.c
+@@ -0,0 +1,79 @@
++/* bug-3645.c
++
++   An array of character type initialized by an array object in code memory
++   was taken for one initialized by a string literal, and the compiler
++   crashed when it looked for the characters of the string.
++ */
++
++#ifdef TEST1
++const unsigned char map[1];
++
++typedef struct
++{
++  unsigned char x;
++  const unsigned char maps[];
++} test_struct;
++
++test_struct test = {.x = 0, .maps = map}; /* ERROR */
++#endif
++
++#ifdef TEST2
++const unsigned char map[]; /* WARNING(SDCC) */ /* IGNORE(GCC) */
++
++typedef struct
++{
++  unsigned char x;
++  const unsigned char maps[];
++} test_struct;
++
++test_struct test = {.x = 0, .maps = map}; /* ERROR */
++#endif
++
++#ifdef TEST3
++const unsigned char map[1];
++
++unsigned char a[2] = map; /* ERROR */
++#endif
++
++#ifdef TEST4
++const unsigned char map[1];
++
++unsigned char f (void)
++{
++  unsigned char a[2] = map; /* ERROR */
++
++  return a[0];
++}
++#endif
++
++#ifdef TEST5
++const unsigned char map[1];
++
++unsigned char f (void)
++{
++  unsigned char a[2] = {map}; /* ERROR */
++
++  return a[0];
++}
++#endif
++
++#ifdef TEST6
++/* A string literal still is an initializer for all of these. */
++typedef struct
++{
++  unsigned char x;
++  const unsigned char maps[];
++} test_struct;
++
++test_struct test = {.x = 0, .maps = "ab"}; /* IGNORE(GCC) */
++
++unsigned char a[3] = "ab";
++unsigned char b[] = {"ab"};
++
++unsigned char f (void)
++{
++  unsigned char c[3] = "ab";
++
++  return c[0];
++}
++#endif

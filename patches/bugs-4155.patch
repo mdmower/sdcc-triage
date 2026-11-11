@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 01:53:15 -0800
+Subject: [PATCH] [bugs #4155] No warning 127 for a cast from an integer as
+ wide as a generic pointer
+
+Warning 127 says that a non-pointer is cast to a generic pointer whose
+storage cannot be set. That is true for an integer narrower than the
+pointer, but uintptr_t holds all of a generic pointer including its storage
+byte, and the round trip through it is exactly what uintptr_t is for.
+
+Keep the warning for narrower integers and for literals (warning 88), and
+keep diagnosing the conversion when it is done without a cast.
+
+Adds valdiag/tests/bug-4155.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                    |  7 +++++-
+ support/valdiag/tests/bug-4155.c | 38 ++++++++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+), 1 deletion(-)
+ create mode 100644 support/valdiag/tests/bug-4155.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 32722052d..1072e7362 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -3393,10 +3393,15 @@ checkPtrCast (sym_link *newType, sym_link *orgType, bool implicit, bool orgIsNul
+                         {
+                           errors += werror (W_LITERAL_GENERIC);
+                         }
+-                      else
++                      else if (getSize (orgType) < GPTRSIZE)
+                         {
+                           errors += werror (W_NONPTR2_GENPTR);
+                         }
++                      else if (implicit)
++                        {
++                          // an integer as wide as a generic pointer (uintptr_t) carries the storage itself
++                          errors += werror (W_INTEGRAL2PTR_NOCAST);
++                        }
+                     }
+                   else if (implicit)
+                     {
+diff --git a/support/valdiag/tests/bug-4155.c b/support/valdiag/tests/bug-4155.c
+new file mode 100644
+index 000000000..3d5fbf73a
+--- /dev/null
++++ b/support/valdiag/tests/bug-4155.c
+@@ -0,0 +1,38 @@
++/* bug-4155.c
++
++   A cast from an integer to a generic pointer warned that the storage of the
++   pointer cannot be set (warning 127) even for uintptr_t, which is wide
++   enough to hold a generic pointer including its storage byte.
++ */
++
++#include <stdint.h>
++
++#ifdef TEST1
++void *f (uintptr_t u)
++{
++  return (void *)u;
++}
++#endif
++
++#ifdef TEST2
++uintptr_t g (void *p)
++{
++  return (uintptr_t)(void *)(uintptr_t)p;
++}
++#endif
++
++#ifdef TEST3
++/* An integer narrower than a generic pointer cannot say where it points. */
++void *h (unsigned char c)
++{
++  return (void *)c; /* WARNING(SDCC_mcs51) */
++}
++#endif
++
++#ifdef TEST4
++/* Without a cast the conversion still deserves a diagnostic. */
++void *i (uintptr_t u)
++{
++  return u; /* WARNING(SDCC) */ /* IGNORE(GCC) */
++}
++#endif

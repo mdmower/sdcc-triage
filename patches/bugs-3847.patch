@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 08:18:37 -0800
+Subject: [PATCH] [bugs #3847] Return the struct value of a call from the
+ call's result object
+
+Only a variable reached the RETURN iCode as a struct or union object. The
+value of a call arrived as the address of the object that geniCodeCall()
+makes for it, and no code generator can return from an address: z80 stopped
+with an internal error, mcs51 returned the address in the registers and left
+the caller's object unwritten (it reports error 172 since the stopgap for
+bug #4157).
+
+ast2iCode() now gives a return statement whose expression is a call of
+struct or union type that result object itself, so the value is returned
+from where the call put it, without another copy.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCicode.c                     |  28 +++++
+ support/regression/tests/bug-3847.c | 154 ++++++++++++++++++++++++++++
+ 2 files changed, 182 insertions(+)
+ create mode 100644 support/regression/tests/bug-3847.c
+
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index defb08b60..9521ac584 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -4115,6 +4115,27 @@ geniCodeReturn (operand *op)
+   ADDTOCHAIN (ic);
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* geniCodeReturnStruct - gen icode for 'return' of the struct or  */
++/*                        union value of a call                    */
++/*-----------------------------------------------------------------*/
++static void
++geniCodeReturnStruct (ast *tree, int lvl)
++{
++  /* A struct or union is returned from an object: the code generators copy it from there to
++     the caller's object. A variable arrives at the return as that object, but the value of
++     a call as its address, which the code generators cannot return. That value is in an
++     object of its own, see geniCodeCall(): return that. */
++  operand *op = ast2iCode (tree, lvl + 1);
++  iCode *ic = iCodeChainEnd;
++
++  if (ic && ic->op == ADDRESS_OF && IC_RESULT (ic) == op && IS_TRUE_SYMOP (IC_LEFT (ic)))
++    op = operandFromSymbol (OP_SYMBOL (IC_LEFT (ic)), false);
++  else
++    wassert (0);
++  geniCodeReturn (op);
++}
++
+ /*-----------------------------------------------------------------*/
+ /* geniCodeIfx - generates code for extended if statement          */
+ /*-----------------------------------------------------------------*/
+@@ -4653,6 +4674,13 @@ ast2iCode (ast * tree, int lvl)
+       return NULL;
+     }
+ 
++  /* the struct or union value of a call is returned from the object that holds it */
++  if (tree->opval.op == RETURN && IS_AST_OP (tree->right) && tree->right->opval.op == CALL && IS_STRUCT (tree->right->ftype))
++    {
++      geniCodeReturnStruct (tree->right, lvl);
++      return NULL;
++    }
++
+   /* special cases for not evaluating */
+   if (tree->opval.op != ':' &&
+       tree->opval.op != '?' &&
+diff --git a/support/regression/tests/bug-3847.c b/support/regression/tests/bug-3847.c
+new file mode 100644
+index 000000000..4262a3410
+--- /dev/null
++++ b/support/regression/tests/bug-3847.c
+@@ -0,0 +1,154 @@
++/* bug-3847.c
++   A function could return a struct or union only from a variable. Returning
++   the value of a call directly gave an internal error in the code generator
++   (z80) or silently left the caller's object unwritten (mcs51).
++ */
++
++#include <testfwk.h>
++
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++struct X
++{
++  int k;
++};
++
++struct s
++{
++  unsigned char a;
++  int b;
++  unsigned char c;
++};
++
++union u
++{
++  unsigned char a;
++  long b;
++};
++
++struct X
++fx (int i)
++{
++  struct X r;
++  r.k = i + 1;
++  return r;
++}
++
++struct X
++f (void)
++{
++  return fx (1);
++}
++
++struct s
++mk (unsigned char x)
++{
++  struct s r;
++  r.a = x;
++  r.b = 0x1200 + x;
++  r.c = x ^ 0xff;
++  return r;
++}
++
++struct s
++mk7 (void)
++{
++  return mk (7);
++}
++
++struct s
++fwd (unsigned char x)
++{
++  return mk (x);
++}
++
++struct s
++chain (unsigned char x)
++{
++  return fwd (x + 1);
++}
++
++struct s
++nested (unsigned char x)
++{
++  return mk (mk (x).a + 2);
++}
++
++struct s
++two (unsigned char c)
++{
++  if (c)
++    return mk (0x21);
++  return mk (0x22);
++}
++
++struct s
++viaPointer (struct s (*fp) (void))
++{
++  return fp ();
++}
++
++union u
++mku (long x)
++{
++  union u r;
++  r.b = x;
++  return r;
++}
++
++union u
++fwdu (long x)
++{
++  return mku (x + 1);
++}
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++  struct X x;
++  struct s r;
++  union u v;
++
++  x.k = 0;
++  x = f ();
++  ASSERT (x.k == 2);
++
++  r = mk7 ();
++  ASSERT (r.a == 7);
++  ASSERT (r.b == 0x1207);
++  ASSERT (r.c == 0xf8);
++
++  r = fwd (0x31);
++  ASSERT (r.a == 0x31);
++  ASSERT (r.b == 0x1231);
++  ASSERT (r.c == 0xce);
++
++  r = chain (0x40);
++  ASSERT (r.a == 0x41);
++  ASSERT (r.b == 0x1241);
++  ASSERT (r.c == 0xbe);
++
++  r = nested (0x50);
++  ASSERT (r.a == 0x52);
++  ASSERT (r.b == 0x1252);
++  ASSERT (r.c == 0xad);
++
++  r = two (1);
++  ASSERT (r.a == 0x21);
++  ASSERT (r.b == 0x1221);
++  r = two (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x1222);
++
++  r = viaPointer (mk7);
++  ASSERT (r.a == 7);
++  ASSERT (r.b == 0x1207);
++  ASSERT (r.c == 0xf8);
++
++  ASSERT (fwd (0x11).b == 0x1211);
++
++  v = fwdu (0x12345677);
++  ASSERT (v.b == 0x12345678);
++#endif
++}

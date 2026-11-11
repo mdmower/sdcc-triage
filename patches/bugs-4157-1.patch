@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 23:11:50 -0800
+Subject: [PATCH] [bugs #4157] mcs51: refuse struct returns that would be
+ miscompiled
+
+A function can return a struct or union only from a plain variable. For any
+other expression of struct type (a call, *p, a[i], s.m, a compound literal,
+a conditional) the return statement receives the address of the object; the
+code generator returned that address in the registers and never wrote the
+caller's object, without any diagnostic.
+
+Until returns of such expressions are implemented, report an error that
+says how to rewrite the code. This is a stopgap, not the fix.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/gen.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
+index fead30fb7..4c95cfb50 100644
+--- a/src/mcs51/gen.c
++++ b/src/mcs51/gen.c
+@@ -5485,6 +5485,14 @@ genRet (iCode *ic)
+   size = AOP_SIZE (IC_LEFT (ic));
+   const bool bigreturn = IS_STRUCT (operandType (IC_LEFT (ic)));
+ 
++  /* Only a plain variable arrives here as a struct. Any other struct-valued expression (a call,
++     *p, a[i], s.m, a compound literal) arrives as its address, and the code below would return
++     that address in the registers and leave the caller's object untouched (bug #4157). Until
++     such returns are implemented, refuse them instead of generating wrong code silently. */
++  if (!bigreturn && IS_STRUCT (currFunc->type->next))
++    werrorfl (ic->filename, ic->lineno, E_NOT_ALLOWED,
++              "returning this struct or union expression directly (assign it to a variable and return that) is");
++
+   if (bigreturn)
+     {
+       // This needs to match the logic in genFunction - could be factored out, but there is a major rewrite of mcs51 codegen planned anyaway,

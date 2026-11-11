@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 23:15:35 -0800
+Subject: [PATCH] [bugs #4156] Keep reads through a pointer to volatile after a
+ store
+
+'*p = v; return *p;' with p pointing to a volatile object returned v without
+reading the object again. Common subexpression elimination forwards the
+stored value to a later read through the same pointer, and its volatility
+check looked at the pointer operand, which is not volatile; what it points
+to is.
+
+No regression test: a read that returns what was just written cannot be
+told from no read at run time in the simulator setup of the test suite.
+Checked in the generated code for xdata and generic pointers: the read is
+back, two reads stay two reads, and a pointer to a non-volatile object still
+gets the store forwarded.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCcse.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/SDCCcse.c b/src/SDCCcse.c
+index 9c7395167..9dde24178 100644
+--- a/src/SDCCcse.c
++++ b/src/SDCCcse.c
+@@ -493,9 +493,14 @@ DEFSETFUNC (findPointerSet)
+   V_ARG (operand **, opp);
+   V_ARG (operand *, rop);
+ 
++  /* A read through a pointer to a volatile object has to happen, whatever was stored before. */
++  if (IS_PTR (operandType (op)) && isVolatile (operandType (op)->next))
++    return 0;
++
+   if (POINTER_SET (cdp->diCode) &&
+       op->key &&
+       IC_RESULT (cdp->diCode)->key == op->key &&
++      !(IS_PTR (operandType (IC_RESULT (cdp->diCode))) && isVolatile (operandType (IC_RESULT (cdp->diCode))->next)) &&
+       !isOperandVolatile (IC_RESULT (cdp->diCode), true) &&
+       !isOperandVolatile (IC_RIGHT (cdp->diCode), true) &&
+       getSize (operandType (IC_RIGHT (cdp->diCode))) ==

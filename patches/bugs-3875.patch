@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 22:27:57 -0800
+Subject: [PATCH] [bugs #3875] Re-enable the bug-3873 test for mcs51
+
+The test passes with --model-medium, --model-large, --model-huge and both
+stack-auto variants on current trunk, so whatever made it fail has been
+fixed since. It stays disabled only for the plain small model, where its
+data does not fit into internal RAM.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ support/regression/tests/bug-3873.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/support/regression/tests/bug-3873.c b/support/regression/tests/bug-3873.c
+index 8b15ff2fe..ba3d5d037 100644
+--- a/support/regression/tests/bug-3873.c
++++ b/support/regression/tests/bug-3873.c
+@@ -52,7 +52,7 @@ static void huffCreate(const uint8* pBits, HuffTable* pHuffTable)
+ }
+ 
+ void testBug(void) {
+-#ifndef __SDCC_mcs51 // Bug #3875
++#if !(defined(__SDCC_mcs51) && defined(__SDCC_MODEL_SMALL) && !defined(__SDCC_STACK_AUTO)) // Lack of memory
+     huffCreate(gBits, &gHuffTab0);
+ 
+     ASSERT(gHuffTab0.mMinCode[0] == 0x0000);

@@ -1,0 +1,382 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 08:19:27 -0800
+Subject: [PATCH] [bugs #3849] Return a struct value that is not a variable
+ through a temporary object
+
+What held for calls (bug #3847) held for every other expression of struct or
+union type that is not a variable: *p, a[i], s.m, p->m, the value of a comma
+or assignment expression or of an inlined call. It reached the RETURN iCode
+as an address, which no code generator can return from: a segfault or an
+internal error for sm83 and z80, an unwritten object in the caller for mcs51.
+
+Such a value is now copied to a temporary object, one for all returns of the
+function, with the tree that a struct assignment is rewritten to, and
+returned from there. The temporary is made at iCode generation like the
+result object of a call; createStructCopy() enters it in the symbol table
+while the copy is decorated, because the arguments of the memcpy call are
+copied there and a copied tree finds its symbols by name.
+
+Conditional expressions are left out. Their evaluation for struct operands
+is wrong by itself (bugs #4131, #4163), so mcs51 keeps refusing to return
+them instead of hiding that.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       |  25 ++++
+ src/SDCCast.h                       |   1 +
+ src/SDCCicode.c                     |  59 ++++++++--
+ src/mcs51/gen.c                     |   9 +-
+ support/regression/tests/bug-3849.c | 177 ++++++++++++++++++++++++++++
+ 5 files changed, 254 insertions(+), 17 deletions(-)
+ create mode 100644 support/regression/tests/bug-3849.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index e48df1739..440d68759 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -4028,6 +4028,31 @@ rewriteStructAssignment (ast *tree)
+   return decorateType (newTree, RESULT_TYPE_OTHER, true);
+ }
+ 
++/*-----------------------------------------------------------*/
++/* createStructCopy - create the decorated tree that copies  */
++/* the value of the struct / union expression "src" (already */
++/* decorated) to the compiler-generated object "dest"        */
++/*-----------------------------------------------------------*/
++ast *
++createStructCopy (symbol *dest, ast *src)
++{
++  ast *destTree = newAst_VALUE (symbolVal (dest));
++  copyAstLoc (destTree, src);
++  ast *tree = newNode ('=', destTree, src);
++  copyAstLoc (tree, src);
++
++  /* as the right side of an assignment, src is not marked as an rvalue */
++  src->rvalue = 0;
++
++  /* decorating a call copies an argument that gets cast, and the
++     copy finds its symbols by their names in the symbol table */
++  addSym (SymbolTab, dest, dest->name, dest->level, dest->block, false);
++  tree = rewriteStructAssignment (tree);
++  deleteSym (SymbolTab, dest, dest->name);
++
++  return tree;
++}
++
+ /*--------------------------------------------------------------*/
+ /* propagateConstExpr - propagates the value of an AST declared */
+ /* 'constexpr' to the current AST node, which it replaces.      */
+diff --git a/src/SDCCast.h b/src/SDCCast.h
+index 540df19e9..e69e04106 100644
+--- a/src/SDCCast.h
++++ b/src/SDCCast.h
+@@ -215,6 +215,7 @@ ast *offsetofOp (sym_link * type, ast * snd);
+ value *evalStmnt (ast *);
+ ast *replaceAstWithTemporary (ast ** treeptr);
+ ast *createRMW (ast *, unsigned, ast *);
++ast *createStructCopy (symbol *dest, ast *src);
+ symbol * createFunctionDecl (symbol *);
+ ast *createFunction (symbol *, ast *);
+ ast *createBlock (symbol *, ast *);
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index 9521ac584..3538286aa 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -47,6 +47,7 @@ int inlinedActive = 0;
+ 
+ symbol *returnLabel;            /* function return label */
+ symbol *entryLabel;             /* function entry  label */
++static symbol *structReturnSym; /* function's temporary object for struct returns */
+ 
+ /*-----------------------------------------------------------------*/
+ /* forward definition of some functions */
+@@ -4055,6 +4056,7 @@ geniCodeFunctionBody (ast * tree, int lvl)
+   iTempLblNum = 0;
+   operandKey = 0;
+   iCodeKey = 0;
++  structReturnSym = NULL;
+   func = ast2iCode (tree->left, lvl + 1);
+ 
+   savefilename = filename;
+@@ -4116,24 +4118,53 @@ geniCodeReturn (operand *op)
+ }
+ 
+ /*-----------------------------------------------------------------*/
+-/* geniCodeReturnStruct - gen icode for 'return' of the struct or  */
+-/*                        union value of a call                    */
++/* geniCodeReturnStruct - gen icode for 'return' of a struct or    */
++/*                        union value that is not a variable       */
+ /*-----------------------------------------------------------------*/
+ static void
+ geniCodeReturnStruct (ast *tree, int lvl)
+ {
+   /* A struct or union is returned from an object: the code generators copy it from there to
+      the caller's object. A variable arrives at the return as that object, but the value of
+-     a call as its address, which the code generators cannot return. That value is in an
+-     object of its own, see geniCodeCall(): return that. */
+-  operand *op = ast2iCode (tree, lvl + 1);
+-  iCode *ic = iCodeChainEnd;
++     any other expression (a call, *p, a[i], s.m, ...) as its address, which the code
++     generators cannot return. */
++  if (tree->opval.op == CALL)
++    {
++      /* The value of a call is in an object of its own, see geniCodeCall(): return that. */
++      operand *op = ast2iCode (tree, lvl + 1);
++      iCode *ic = iCodeChainEnd;
+ 
+-  if (ic && ic->op == ADDRESS_OF && IC_RESULT (ic) == op && IS_TRUE_SYMOP (IC_LEFT (ic)))
+-    op = operandFromSymbol (OP_SYMBOL (IC_LEFT (ic)), false);
+-  else
+-    wassert (0);
+-  geniCodeReturn (op);
++      if (ic && ic->op == ADDRESS_OF && IC_RESULT (ic) == op && IS_TRUE_SYMOP (IC_LEFT (ic)))
++        op = operandFromSymbol (OP_SYMBOL (IC_LEFT (ic)), false);
++      else
++        wassert (0);
++      geniCodeReturn (op);
++      return;
++    }
++
++  /* Copy any other value to a temporary object, one for all such returns of the function. */
++  if (!structReturnSym)
++    {
++      symbol *sym = newSymbol (genSymName (scopeLevel), 1);
++      int stack;
++
++      sym->type = copyLinkChain (currFunc->type->next);
++      sym->etype = getSpec (sym->type);
++      SPEC_SCLS (sym->etype) = S_AUTO;
++      SPEC_OCLS (sym->etype) = NULL;
++      SPEC_EXTR (sym->etype) = 0;
++      SPEC_STAT (sym->etype) = 0;
++      SPEC_CONST (sym->etype) = 0;
++      SPEC_VOLATILE (sym->etype) = 0;
++      stack = allocVariables (sym);
++      currFunc->stack += options.useXstack ? 0 : stack;
++      currFunc->xstack += options.useXstack ? stack : 0;
++      structReturnSym = sym;
++    }
++  tree = createStructCopy (structReturnSym, tree);
++  if (!tree->isError)
++    ast2iCode (tree, lvl + 1);
++  geniCodeReturn (operandFromSymbol (structReturnSym, false));
+ }
+ 
+ /*-----------------------------------------------------------------*/
+@@ -4674,8 +4705,10 @@ ast2iCode (ast * tree, int lvl)
+       return NULL;
+     }
+ 
+-  /* the struct or union value of a call is returned from the object that holds it */
+-  if (tree->opval.op == RETURN && IS_AST_OP (tree->right) && tree->right->opval.op == CALL && IS_STRUCT (tree->right->ftype))
++  /* A struct or union value that is not a variable needs an object to be returned from.
++     A conditional expression is left as it is: for these types its evaluation is wrong
++     already (bugs #4131, #4163), which the code generators should refuse rather than hide. */
++  if (tree->opval.op == RETURN && IS_AST_OP (tree->right) && tree->right->opval.op != '?' && IS_STRUCT (tree->right->ftype))
+     {
+       geniCodeReturnStruct (tree->right, lvl);
+       return NULL;
+diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
+index 3f9bd0c88..c80d6c5de 100644
+--- a/src/mcs51/gen.c
++++ b/src/mcs51/gen.c
+@@ -5489,10 +5489,11 @@ genRet (iCode *ic)
+   size = AOP_SIZE (IC_LEFT (ic));
+   const bool bigreturn = IS_STRUCT (operandType (IC_LEFT (ic)));
+ 
+-  /* Only a plain variable arrives here as a struct. Any other struct-valued expression (a call,
+-     *p, a[i], s.m, a compound literal) arrives as its address, and the code below would return
+-     that address in the registers and leave the caller's object untouched (bug #4157). Until
+-     such returns are implemented, refuse them instead of generating wrong code silently. */
++  /* A struct arrives here as an object: a variable, or the object the front end provides for
++     the value of another expression (geniCodeReturnStruct). A conditional expression still
++     arrives as its address (bugs #4131, #4163), and the code below would return that address
++     in the registers and leave the caller's object untouched (bug #4157). Until such returns
++     are implemented, refuse them instead of generating wrong code silently. */
+   if (!bigreturn && IS_STRUCT (currFunc->type->next))
+     werrorfl (ic->filename, ic->lineno, E_NOT_ALLOWED,
+               "returning this struct or union expression directly (assign it to a variable and return that) is");
+diff --git a/support/regression/tests/bug-3849.c b/support/regression/tests/bug-3849.c
+new file mode 100644
+index 000000000..b3ad5423f
+--- /dev/null
++++ b/support/regression/tests/bug-3849.c
+@@ -0,0 +1,177 @@
++/* bug-3849.c
++   A function could return a struct or union only from a variable. Returning
++   any other value, such as *p, a[i] or s.m, gave a segfault or an internal
++   error in the code generator (sm83, z80) or silently left the caller's
++   object unwritten (mcs51).
++ */
++
++#include <testfwk.h>
++
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++struct Test
++{
++  int f;
++};
++
++struct s
++{
++  unsigned char a;
++  int b;
++};
++
++struct w
++{
++  unsigned char c;
++  struct s m;
++};
++
++union u
++{
++  unsigned char a;
++  int b;
++};
++
++const struct s gs = {0x11, 0x1111};
++const struct s ga[3] = {{0x20, 0x2020}, {0x21, 0x2121}, {0x22, 0x2222}};
++const struct w gw = {0x33, {0x34, 0x3434}};
++unsigned char cnt;
++
++struct Test
++bitcast (int arg)
++{
++  return *((struct Test *)(&arg));
++}
++
++struct s
++deref (const struct s *p)
++{
++  return *p;
++}
++
++struct s
++element (unsigned char i)
++{
++  return ga[i];
++}
++
++struct s
++member (void)
++{
++  return gw.m;
++}
++
++struct s
++arrow (const struct w *p)
++{
++  return p->m;
++}
++
++struct s
++comma (void)
++{
++  return (cnt++, gs);
++}
++
++struct s
++assign (const struct s *p)
++{
++  struct s x;
++  return x = *p;
++}
++
++struct s
++many (unsigned char c, const struct s *p)
++{
++  if (c == 0)
++    return *p;
++  if (c == 1)
++    return ga[2];
++  if (c == 2)
++    return deref (&ga[0]);
++  return gw.m;
++}
++
++static inline struct s
++inl (unsigned char x)
++{
++  struct s r;
++  r.a = x;
++  r.b = 0x5600 + x;
++  return r;
++}
++
++struct s
++inlined (unsigned char x)
++{
++  return inl (x + 1);
++}
++
++union u
++derefu (union u *p)
++{
++  return *p;
++}
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++  static const unsigned char expect[4] = {0x11, 0x22, 0x20, 0x34};
++  struct Test t;
++  struct s r;
++  union u v;
++  unsigned char c;
++
++  t.f = 0;
++  t = bitcast (0x1357);
++  ASSERT (t.f == 0x1357);
++
++  r = deref (&gs);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++
++  r = element (1);
++  ASSERT (r.a == 0x21);
++  ASSERT (r.b == 0x2121);
++
++  r = member ();
++  ASSERT (r.a == 0x34);
++  ASSERT (r.b == 0x3434);
++
++  r = arrow (&gw);
++  ASSERT (r.a == 0x34);
++  ASSERT (r.b == 0x3434);
++
++  r = comma ();
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  ASSERT (cnt == 1);
++
++  r = assign (&ga[1]);
++  ASSERT (r.a == 0x21);
++  ASSERT (r.b == 0x2121);
++
++  for (c = 0; c < 4; c++)
++    {
++      r = many (c, &gs);
++      ASSERT (r.a == expect[c]);
++      ASSERT (r.b == expect[c] * 0x101);
++    }
++
++  /* the returned object is the one the argument points to */
++  r.a = 0x45;
++  r.b = 0x4545;
++  r = deref (&r);
++  ASSERT (r.a == 0x45);
++  ASSERT (r.b == 0x4545);
++
++  r = inlined (0x70);
++  ASSERT (r.a == 0x71);
++  ASSERT (r.b == 0x5671);
++
++  v.b = 0x1234;
++  v = derefu (&v);
++  ASSERT (v.b == 0x1234);
++#endif
++}

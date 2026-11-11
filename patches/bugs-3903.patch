@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 22:26:53 -0800
+Subject: [PATCH] [bugs #3903] mcs51: compare addresses of banked functions
+ without an internal error
+
+With --model-huge every function is banked and its address is three bytes.
+Comparisons of such addresses go through sdcc_gptr_cmp, and
+loadDptrFromOperand asserted ("need pointerCode") when the left operand was
+the immediate address of a function, because it only knew how to produce the
+third byte for a generic pointer made by a cast. For a banked function that
+byte is simply the bank, the top byte of the address.
+
+Re-enables tests/funcptrcmp.c.in for mcs51.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/gen.c                          | 5 +++++
+ support/regression/tests/funcptrcmp.c.in | 2 --
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
+index 9189ad43f..de1c29cfe 100644
+--- a/src/mcs51/gen.c
++++ b/src/mcs51/gen.c
+@@ -2072,6 +2072,11 @@ loadDptrFromOperand (operand *op, bool loadBToo)
+             {
+               if (AOP (op)->aopu.aop_immd.from_cast_remat)
+                 emitcode ("mov", "b,%s", opGet (op, AOP_SIZE (op) - 1, FALSE, FALSE));
++              else if (IFFUNC_ISBANKEDCALL (operandType (op)))
++                {
++                  /* The address of a banked function: the third byte is its bank, not a pointer type. */
++                  emitcode ("mov", "b,%s", opGet (op, AOP_SIZE (op) - 1, FALSE, FALSE));
++                }
+               else
+                 {
+                   wassertl (FALSE, "need pointerCode");
+diff --git a/support/regression/tests/funcptrcmp.c.in b/support/regression/tests/funcptrcmp.c.in
+index d00f51411..ad4c76aa9 100644
+--- a/support/regression/tests/funcptrcmp.c.in
++++ b/support/regression/tests/funcptrcmp.c.in
+@@ -35,9 +35,7 @@
+ void
+ testFuncPtrCmp(void)
+ {
+-#ifndef __SDCC_mcs51 // bug #3903
+ 	ASSERT (&f1 != &g1);
+ 	ASSERT (&f2 != &g2);
+-#endif
+ }
+ 

@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 22:40:34 -0800
+Subject: [PATCH] [bugs #3563] mcs51: do not overlay stack variables that are
+ live at the same time
+
+Stack offsets are assigned per block: variables of sibling blocks share
+stack space. Optimization can make a variable live outside the block it was
+declared in, most easily across the bodies of inlined functions, and then
+two live variables ended up in overlapping slots; in the test a parameter of
+one inlined function overwrote the result of another.
+
+The tree-decomposition register allocator already moves each variable to the
+lowest common ancestor of the blocks where it is live (added for bug #2567,
+with a TODO to do the same for the old allocator). mcs51 still uses the old
+allocator, so do it there before the stack offsets are assigned.
+
+Re-enables tests/bug-3563.c for mcs51.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/ralloc.c                  | 38 +++++++++++++++++++++++++++++
+ support/regression/tests/bug-3563.c |  2 --
+ 2 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/src/mcs51/ralloc.c b/src/mcs51/ralloc.c
+index 6ea622eee..0c69973b7 100644
+--- a/src/mcs51/ralloc.c
++++ b/src/mcs51/ralloc.c
+@@ -24,6 +24,7 @@
+ -------------------------------------------------------------------------*/
+ 
+ #include "common.h"
++#include "SDCCbtree.h"
+ #include "ralloc.h"
+ #include "gen.h"
+ #include "dbuf_string.h"
+@@ -3359,6 +3360,42 @@ positionRegsReverse (eBBlock ** ebbs, int count)
+       }
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* widenBlocks - move each variable to a block that encloses every */
++/* place where it is live. Stack allocation lets variables of      */
++/* sibling blocks share stack space, but optimizations, inlining   */
++/* in particular, can make a variable live outside the block it    */
++/* was declared in.                                                */
++/*-----------------------------------------------------------------*/
++static void
++widenBlocks (eBBlock **ebbs, int count)
++{
++  int i, key;
++  iCode *ic;
++
++  for (i = 0; i < count; i++)
++    for (ic = ebbs[i]->sch; ic; ic = ic->next)
++      {
++        if (!ic->rlive)
++          continue;
++
++        for (key = 0; key < ic->rlive->size; key++)
++          {
++            symbol *sym;
++
++            if (!bitVectBitValue (ic->rlive, key))
++              continue;
++            sym = hTabItemWithKey (liveRanges, key);
++            if (!sym)
++              continue;
++
++            sym->block = btree_lowest_common_ancestor (sym->block, ic->block);
++            if (SYM_SPIL_LOC (sym))
++              SYM_SPIL_LOC (sym)->block = btree_lowest_common_ancestor (SYM_SPIL_LOC (sym)->block, sym->block);
++          }
++      }
++}
++
+ /*-----------------------------------------------------------------*/
+ /* assignRegisters - assigns registers to each live range as need  */
+ /*-----------------------------------------------------------------*/
+@@ -3432,6 +3469,7 @@ mcs51_assignRegisters (ebbIndex * ebbi)
+   /* redo that offsets for stacked automatic variables */
+   if (currFunc)
+     {
++      widenBlocks (ebbs, count);
+       redoStackOffsets ();
+     }
+ 
+diff --git a/support/regression/tests/bug-3563.c b/support/regression/tests/bug-3563.c
+index 177b85eaf..488f49924 100644
+--- a/support/regression/tests/bug-3563.c
++++ b/support/regression/tests/bug-3563.c
+@@ -101,10 +101,8 @@ int m(void) {
+ void
+ testBug (void)
+ {
+-#ifndef __SDCC_mcs51 // This bug #3563 is not yet fixed.
+ #if !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) // Lack of memory
+   m ();
+ #endif
+-#endif
+ }
+ 

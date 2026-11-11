@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Mon, 9 Nov 2026 23:21:44 -0800
+Subject: [PATCH] [bugs #3716] mcs51: load the accumulator with 'mov a', not
+ 'mov acc'
+
+aopPut wrote a value read through @Ri or from Rn into an operand that lives
+in the accumulator as 'mov acc,@r0': a move to the direct address of ACC,
+two bytes and two cycles. 'mov a,@r0' does the same in one byte. Only other
+registers need their direct-address name there.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/mcs51/gen.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
+index 4c95cfb50..3f9bd0c88 100644
+--- a/src/mcs51/gen.c
++++ b/src/mcs51/gen.c
+@@ -1926,7 +1926,11 @@ aopPut (asmop *aop, const char *s, int offset)
+               EQ (s, "r0") || EQ (s, "r1") || EQ (s, "r2") || EQ (s, "r3") ||
+               EQ (s, "r4") || EQ (s, "r5") || EQ (s, "r6") || EQ (s, "r7"))
+             {
+-              emitcode ("mov", "%s,%s", aop->aopu.aop_reg[offset]->dname, s);
++              /* The accumulator takes @Ri and Rn directly; 'mov acc,...' would be a byte longer. */
++              if (EQ (aop->aopu.aop_reg[offset]->name, "a"))
++                emitcode ("mov", "a,%s", s);
++              else
++                emitcode ("mov", "%s,%s", aop->aopu.aop_reg[offset]->dname, s);
+             }
+           else
+             {

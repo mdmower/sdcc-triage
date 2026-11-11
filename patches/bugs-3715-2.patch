@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 11:55:55 -0800
+Subject: [PATCH] [bugs #3715] sdcpp: answer __has_builtin without the
+ compiler's symbol table
+
+__has_builtin stopped the preprocessor with the same kind of internal compiler error as __has_attribute ("unreachable dummy in cc1names_builtin_p"): c_common_has_builtin() asked names_builtin_p(), a dummy in sdcpp. The symbol table is in sdcc and the port is not known to the preprocessor, so the answer is now 1 for the two names that sdcc has built in for every port, __builtin_offsetof and __builtin_unreachable, and 0 otherwise. Built-in functions of single ports (__builtin_memcpy and others on the z80 family and ds390) are therefore reported as missing.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ support/cpp/gcc/c-family/c-lex.cc   |  8 ++++
+ support/regression/tests/bug-3715.c | 59 +++++++++++++++++++++++++++++
+ 2 files changed, 67 insertions(+)
+
+diff --git a/support/cpp/gcc/c-family/c-lex.cc b/support/cpp/gcc/c-family/c-lex.cc
+index fbd559ef7..59ae4cc1a 100644
+--- a/support/cpp/gcc/c-family/c-lex.cc
++++ b/support/cpp/gcc/c-family/c-lex.cc
+@@ -487,7 +487,15 @@ c_common_has_builtin (cpp_reader *pfile)
+ 	break;
+     }
+ 
++#if 0 // sdcpp
+   return names_builtin_p (name);
++#else // sdcpp
++  /* sdcpp: the symbol table is in sdcc, and what is built in there depends
++     on the port, which is not known here.  Only these two are built in for
++     every port.  */
++  return (!strcmp (name, "__builtin_offsetof")
++	  || !strcmp (name, "__builtin_unreachable"));
++#endif // sdcpp
+ }
+ 
+ 
+diff --git a/support/regression/tests/bug-3715.c b/support/regression/tests/bug-3715.c
+index fafde374f..6c22bcceb 100644
+--- a/support/regression/tests/bug-3715.c
++++ b/support/regression/tests/bug-3715.c
+@@ -101,3 +101,62 @@ testBug (void)
+   ASSERT (!UNKNOWN_CPP);
+   ASSERT (!UNKNOWN_STD);
+ }
++
++/* __has_builtin failed the same way. It asked the compiler proper for its
++   built-in functions. */
++#ifdef __has_builtin
++#  if __has_builtin(__builtin_offsetof)
++#    define OFFSETOF(s, m) __builtin_offsetof (s, m)
++#  endif
++#  if __has_builtin(__builtin_unreachable)
++#    define UNREACHABLE() __builtin_unreachable ()
++#  endif
++#  if __has_builtin(__builtin_sdcc_bug_3715) || __has_builtin ( sdcc_bug_3715 )
++#    define UNKNOWN_BUILTIN 1
++#  endif
++#endif
++
++#ifdef OFFSETOF
++#  define HAS_OFFSETOF 1
++#else
++#  define HAS_OFFSETOF 0
++#  include <stddef.h>
++#  define OFFSETOF(s, m) offsetof (s, m)
++#endif
++#ifdef UNREACHABLE
++#  define HAS_UNREACHABLE 1
++#else
++#  define HAS_UNREACHABLE 0
++#  define UNREACHABLE()
++#endif
++#ifndef UNKNOWN_BUILTIN
++#  define UNKNOWN_BUILTIN 0
++#endif
++
++struct pair
++{
++  unsigned char a;
++  unsigned char b;
++};
++
++static unsigned char
++upToThree (unsigned char c)
++{
++  if (c > 3)
++    UNREACHABLE ();
++  return c;
++}
++
++void
++testBuiltin (void)
++{
++  ASSERT (OFFSETOF (struct pair, b) == 1);
++  ASSERT (upToThree (2) == 2);
++
++  ASSERT (!UNKNOWN_BUILTIN);
++#ifdef __SDCC
++  /* Built in for every port. */
++  ASSERT (HAS_OFFSETOF);
++  ASSERT (HAS_UNREACHABLE);
++#endif
++}

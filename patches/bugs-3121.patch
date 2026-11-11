@@ -1,0 +1,519 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 10 Nov 2026 07:50:44 -0800
+Subject: [PATCH] [bugs #3121] Honour designators anywhere in the initializer
+ list of an object initialized by code
+
+createIvalStruct() took designated initializers only ahead of the first one without a designator; behind it they went to the members in order, or were rejected with error 69. Several initializers for parts of one member each zeroed the rest of it again, and one for a part of a member that an expression initializes ({1, .t = x, .t.l = 41}, the example of C defect report 413) was dropped with warning 147. createIvalArray() left the elements ahead of a designated one uninitialized and zeroed elements whose initializer came later in the list. Such lists are now ordered with reorderIlistFull(), as printIval() does for static storage: designatedIlist() turns the result into the form createIvalStruct() handles, createIvalArray() walks it and zeroes the holes, and an initializer for a part of an object that an expression initialized as a whole is applied afterwards as a store to that part only (createIvalPart).
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       | 118 +++++++++++++++-
+ src/SDCCval.c                       |  53 ++++++-
+ src/SDCCval.h                       |   1 +
+ support/regression/tests/bug-3121.c | 210 ++++++++++++++++++++++++++++
+ 4 files changed, 375 insertions(+), 7 deletions(-)
+ create mode 100644 support/regression/tests/bug-3121.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 09fc159e1..1f6209808 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1277,6 +1277,87 @@ findStructField (symbol *fields, symbol *target)
+   return NULL; /* not found */
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* createIvalPart - generates the initial value for the part DESIG */
++/*   names of SYM, which has its initial value otherwise. Nothing  */
++/*   but that part changes (C11 6.7.9p19).                         */
++/*-----------------------------------------------------------------*/
++static ast *
++createIvalPart (ast *sym, sym_link *type, designation *desig, initList *ilist, ast *wid, ast *rootValue)
++{
++  for (; desig; desig = desig->next)
++    {
++      symbol *sflds;
++
++      if (desig->type == DESIGNATOR_STRUCT && IS_STRUCT (type) &&
++          (sflds = findStructField (SPEC_STRUCT (type)->fields, desig->designator.tag)))
++        {
++          sflds->implicit = 1;
++          sym = newNode (PTR_OP, newNode ('&', sym, NULL), newAst_VALUE (symbolVal (sflds)));
++          type = sflds->type;
++        }
++      else if (desig->type == DESIGNATOR_ARRAY && IS_ARRAY (type) &&
++               (!DCL_ELEM (type) || desig->designator.elemno < (int) DCL_ELEM (type)))
++        {
++          sym = newNode ('[', sym, newAst_VALUE (valueFromLit ((float) desig->designator.elemno)));
++          type = type->next;
++        }
++      else
++        {
++          werrorfl (ilist->filename, ilist->lineno, E_BAD_DESIGNATOR);
++          return wid;
++        }
++      sym = decorateType (resolveSymbols (sym), RESULT_TYPE_NONE, true);
++    }
++
++  return createIval (sym, type, ilist, wid, rootValue, 1);
++}
++
++/*-----------------------------------------------------------------*/
++/* designatedIlist - createIvalStruct() takes the designated       */
++/*   initializers of a list first, each for a member of its own,   */
++/*   and gives the ones behind them to the members that follow the */
++/*   last one designated. Any other list with designators is       */
++/*   brought into that form here: one designated initializer for   */
++/*   each member that has any. PARTS is as for reorderIlistCode(). */
++/*-----------------------------------------------------------------*/
++static initList *
++designatedIlist (sym_link *type, initList *ilist, initList **parts)
++{
++  initList *iloop, *jloop, *head = NULL, **end = &head;
++  symbol *sflds = SPEC_STRUCT (type)->fields;
++  bool asis = true;
++
++  for (iloop = ilist->init.deep; iloop && iloop->designation; iloop = iloop->next)
++    for (jloop = ilist->init.deep; jloop != iloop; jloop = jloop->next)
++      if (iloop->designation->type == DESIGNATOR_STRUCT && jloop->designation->type == DESIGNATOR_STRUCT &&
++          !strcmp (iloop->designation->designator.tag->name, jloop->designation->designator.tag->name))
++        asis = false;
++  /* a union takes one initializer, the others are surplus as they were */
++  for (; iloop && SPEC_STRUCT (type)->type != UNION; iloop = iloop->next)
++    if (iloop->designation)
++      asis = false;
++  if (asis || !sflds)
++    return ilist->init.deep;
++
++  ilist = reorderIlistCode (type, ilist, parts);
++  for (iloop = ilist ? ilist->init.deep : NULL; sflds && iloop; sflds = sflds->next)
++    {
++      if (IS_BITFIELD (sflds->type) && SPEC_BUNNAMED (sflds->etype))
++        continue;
++      if (iloop->type != INIT_HOLE)
++        {
++          iloop->designation = newDesignation (DESIGNATOR_STRUCT, sflds);
++          *end = iloop;
++          end = &iloop->next;
++        }
++      iloop = iloop->next;
++    }
++  *end = NULL;
++
++  return head;
++}
++
+ static int aggregateIsAutoVar = 0;
+ 
+ /*-----------------------------------------------------------------*/
+@@ -1292,7 +1373,8 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+   if (ilist && ilist->type != INIT_DEEP)
+     return createIvalType (sym, type, ilist);
+ 
+-  initList *iloop = ilist ? ilist->init.deep : NULL;
++  initList *parts = NULL;
++  initList *iloop = ilist ? designatedIlist (type, ilist, &parts) : NULL;
+ 
+   set *initialized_fields = newSet ();
+ 
+@@ -1499,6 +1581,9 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+     }
+ 
+ release:
++  for (; parts; parts = parts->next)
++    rast = createIvalPart (sym, type, parts->designation, parts, rast, rootValue);
++
+   deleteSet (&initialized_fields);
+ 
+   return rast;
+@@ -1511,7 +1596,7 @@ static ast *
+ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
+ {
+   ast *rast = NULL;
+-  initList *iloop;
++  initList *iloop, *elem, *parts = NULL;
+   int lcnt = 0, size = 0, idx = 0;
+   literalList *literalL;
+   sym_link *etype = getSpec (type);
+@@ -1572,6 +1657,17 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
+     }
+   else
+     {
++      /* With designators, take the initializers in the order of the elements,
++         all those for one element together, and a hole for an element that
++         has none: it is zeroed like the ones behind the last initializer. */
++      for (elem = iloop; elem && !elem->designation; elem = elem->next)
++        ;
++      if (elem)
++        {
++          ilist = reorderIlistCode (type, ilist, &parts);
++          iloop = ilist ? ilist->init.deep : NULL;
++        }
++
+       for (;;)
+         {
+           ast *aSym;
+@@ -1610,13 +1706,29 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
+               break;
+             }
+ 
++          elem = iloop;
++          if (iloop && iloop->type == INIT_HOLE)
++            {
++              /* static storage is zero as it is */
++              if (!AST_SYMBOL (rootValue)->islocal)
++                {
++                  idx++;
++                  iloop = iloop->next;
++                  continue;
++                }
++              elem = NULL;
++            }
++
+           aSym = newNode ('[', sym, newAst_VALUE (valueFromLit ((float) (idx))));
+           setAstFileLine (aSym, iloop ? iloop->filename : sym->filename, iloop ? iloop->lineno : sym->lineno);
+           aSym = decorateType (resolveSymbols (aSym), RESULT_TYPE_NONE, true);
+-          rast = createIval (aSym, type->next, iloop, rast, rootValue, 0);
++          rast = createIval (aSym, type->next, elem, rast, rootValue, 0);
+           idx++;
+           iloop = (iloop ? iloop->next : NULL);
+         }
++
++      for (; parts; parts = parts->next)
++        rast = createIvalPart (sym, type, parts->designation, parts, rast, rootValue);
+     }
+ 
+   /* if we have not been given a size  */
+diff --git a/src/SDCCval.c b/src/SDCCval.c
+index 74fcbf9c6..dd03a09c0 100644
+--- a/src/SDCCval.c
++++ b/src/SDCCval.c
+@@ -582,10 +582,14 @@ nextInitSlot (sym_link * type, int slot)
+ /*   union through one alternative and walks past the members       */
+ /*   promoted out of the others, the way printIvalStruct() does, so */
+ /*   that they consume no initializer of their own.                 */
++/*   PARTS, unless NULL, takes the initializers for a part of an    */
++/*   object that an expression initializes as a whole, as in        */
++/*   {.t = x, .t.l = 1}. They keep their designation and are not in */
++/*   the list returned.                                             */
+ /*------------------------------------------------------------------*/
+-static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipaliases)
++static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipaliases, initList ** parts)
+ {
+-  initList *iloop, *nlist, **nlistArray;
++  initList *iloop, *nlist, **nlistArray, **partArray = NULL;
+   symbol *sflds;
+   int size=0, idx;
+ 
+@@ -636,6 +640,8 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+         }
+     }
+   nlistArray = Safe_calloc ( size, sizeof(initList *) );
++  if (parts)
++    partArray = Safe_calloc ( size, sizeof(initList *) );
+ 
+   /* pull together all the initializers into an ordered list */
+   iloop = ilist ? ilist->init.deep : NULL;
+@@ -670,6 +676,24 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+             {
+               if (idx >= size)
+                 continue;
++              if (partArray && nlistArray[idx] && nlistArray[idx]->type == INIT_NODE)
++                {
++                  /* The expression stays the initializer of the object;
++                     this one changes a part of it (C11 6.7.9p19). */
++                  initList **eol, *part;
++
++                  if (iloop->type == INIT_NODE)
++                    part = newiList(INIT_NODE, iloop->init.node);
++                  else
++                    part = newiList(INIT_DEEP, iloop->init.deep);
++                  part->filename = iloop->filename;
++                  part->lineno = iloop->lineno;
++                  part->designation = iloop->designation;
++                  for (eol = &partArray[idx]; *eol; )
++                    eol = &((*eol)->next);
++                  *eol = part;
++                  continue;
++                }
+               if (nlistArray[idx] == NULL)
+                 nlistArray[idx] = newiList(INIT_DEEP, NULL);
+               moveNestedInit(nlistArray[idx], iloop);
+@@ -685,9 +709,19 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+           if (nlistArray[idx] != NULL)
+             werrorfl (iloop->filename, iloop->lineno, W_DUPLICATE_INIT, idx);
+           nlistArray[idx] = iloop;
++          if (partArray)
++            partArray[idx] = NULL;
+         }
+     }
+ 
++  /* hand over the parts, which are for different objects from slot to slot */
++  for (idx = 0; partArray && idx < size; idx++)
++    {
++      while (*parts)
++        parts = &((*parts)->next);
++      *parts = partArray[idx];
++    }
++
+   /* create new list from nlistArray/size */
+   nlist = NULL;
+   sflds = IS_STRUCT (type) ? SPEC_STRUCT (type)->fields : NULL;
+@@ -739,7 +773,7 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+ /*------------------------------------------------------------------*/
+ initList *reorderIlist (sym_link * type, initList * ilist)
+ {
+-  return reorderIlistFull (type, ilist, false);
++  return reorderIlistFull (type, ilist, false, NULL);
+ }
+ 
+ /*------------------------------------------------------------------*/
+@@ -751,7 +785,18 @@ initList *reorderIlist (sym_link * type, initList * ilist)
+ /*------------------------------------------------------------------*/
+ initList *reorderIlistIval (sym_link * type, initList * ilist)
+ {
+-  return reorderIlistFull (type, ilist, true);
++  return reorderIlistFull (type, ilist, true, NULL);
++}
++
++/*------------------------------------------------------------------*/
++/* reorderIlistCode - the same, for createIval(), which initializes */
++/*   by code and so can also change a part of an object that an     */
++/*   expression initialized as a whole. Those initializers are      */
++/*   added to PARTS, to be applied after the list returned.         */
++/*------------------------------------------------------------------*/
++initList *reorderIlistCode (sym_link * type, initList * ilist, initList ** parts)
++{
++  return reorderIlistFull (type, ilist, true, parts);
+ }
+ 
+ /*------------------------------------------------------------------*/
+diff --git a/src/SDCCval.h b/src/SDCCval.h
+index c4ffaff60..d40e0d9b4 100644
+--- a/src/SDCCval.h
++++ b/src/SDCCval.h
+@@ -168,6 +168,7 @@ designation *revDesignation (designation *);
+ designation *copyDesignation (designation *);
+ initList *reorderIlist (sym_link *, initList *);
+ initList *reorderIlistIval (sym_link *, initList *);
++initList *reorderIlistCode (sym_link *, initList *, initList **);
+ value *valFromType (sym_link *);
+ value *constFloatVal (const char *);
+ value *constFixed16x16Val (const char *);
+diff --git a/support/regression/tests/bug-3121.c b/support/regression/tests/bug-3121.c
+new file mode 100644
+index 000000000..67f187255
+--- /dev/null
++++ b/support/regression/tests/bug-3121.c
+@@ -0,0 +1,210 @@
++/* bug-3121.c
++   In the initializer list of a struct that is initialized by code, as one
++   with automatic storage is, a designator was honoured ahead of the first
++   initializer without one only. Behind it, initializers went to the members
++   in order whatever they designated, or were rejected ("initialization needs
++   curly braces"). Each of several initializers for parts of one member or
++   element zeroed the rest of it again, and one for a part of a member that an
++   expression had initialized was dropped. In an array, elements ahead of a
++   designated one were left uninitialized, and zeroed after all when their
++   initializer came later in the list.
++
++   The first case is the one of the ticket, the example of C defect report 413.
++ */
++
++#include <testfwk.h>
++
++#include <string.h>
++
++struct T {
++	int k;
++	int l;
++};
++
++struct S {
++	int i;
++	struct T t;
++};
++
++struct P {
++	char a;
++	char b;
++	char c;
++};
++
++struct Q {
++	char h;
++	struct P p;
++	char v[2];
++	char t;
++};
++
++union U {
++	struct P p;
++	long n;
++};
++
++/* comment 5 of the ticket */
++struct B {
++	char a;
++	union {
++		char b;
++		char c;
++	};
++};
++
++struct T x = {.l = 43, .k = 42, };
++struct P y = {7, 8, 9};
++
++struct P ga = {1, .c = 3};
++struct Q gq = {1, .p.b = 2, .p.c = 3, .v[1] = 4, 6};
++char gv[4] = {[2] = 4, 5, [0] = 3};
++const struct B cb = {.c = 42};
++
++/* Each of these is called twice and leaves a pattern in its variables, so
++   that a part the initializer does not reach is not zero by accident. */
++
++static void
++checkOverride (void)
++{
++	struct S l = {1, .t = x, .t.l = 41, };
++
++	ASSERT (l.i == 1);
++#ifdef __SDCC /* GCC initializes t anew for its second initializer */
++	ASSERT (l.t.k == 42);
++#endif
++	ASSERT (l.t.l == 41);
++	memset (&l, 0x5a, sizeof (l));
++}
++
++static void
++checkBehind (void)
++{
++	struct P a = {1, .c = 3};
++	struct P b = {.b = 2, 5, .a = 1};
++
++	ASSERT (a.a == 1);
++	ASSERT (a.b == 0);
++	ASSERT (a.c == 3);
++	ASSERT (b.a == 1);
++	ASSERT (b.b == 2);
++	ASSERT (b.c == 5);
++	memset (&a, 0x5a, sizeof (a));
++	memset (&b, 0x5a, sizeof (b));
++}
++
++static void
++checkNested (void)
++{
++	struct Q q = {1, .p.b = 2, .p.c = 3, .v[1] = 4, 6};
++
++	ASSERT (q.h == 1);
++	ASSERT (q.p.a == 0);
++	ASSERT (q.p.b == 2);
++	ASSERT (q.p.c == 3);
++	ASSERT (q.v[0] == 0);
++	ASSERT (q.v[1] == 4);
++	ASSERT (q.t == 6);
++	memset (&q, 0x5a, sizeof (q));
++}
++
++static void
++checkUnion (void)
++{
++	union U u = {.p.a = 1, .p.c = 3};
++	struct B b = {.c = 42};
++
++	ASSERT (u.p.a == 1);
++	ASSERT (u.p.b == 0);
++	ASSERT (u.p.c == 3);
++	ASSERT (b.a == 0);
++	ASSERT (b.c == 42);
++	memset (&u, 0x5a, sizeof (u));
++	memset (&b, 0x5a, sizeof (b));
++}
++
++static void
++checkArray (void)
++{
++	char v[4] = {[2] = 4, 5, [0] = 3};
++	struct P w[2] = {[1].a = 2, [1].c = 3};
++
++	ASSERT (v[0] == 3);
++	ASSERT (v[1] == 0);
++	ASSERT (v[2] == 4);
++	ASSERT (v[3] == 5);
++	ASSERT (w[0].a == 0);
++	ASSERT (w[0].b == 0);
++	ASSERT (w[0].c == 0);
++	ASSERT (w[1].a == 2);
++	ASSERT (w[1].b == 0);
++	ASSERT (w[1].c == 3);
++	memset (v, 0x5a, sizeof (v));
++	memset (w, 0x5a, sizeof (w));
++}
++
++static void
++checkElement (void)
++{
++	struct P w[2] = {[1] = y, [1].b = 3};
++
++	ASSERT (w[0].a == 0);
++	ASSERT (w[0].c == 0);
++#ifdef __SDCC /* as above */
++	ASSERT (w[1].a == 7);
++	ASSERT (w[1].c == 9);
++#endif
++	ASSERT (w[1].b == 3);
++	memset (w, 0x5a, sizeof (w));
++}
++
++void
++testOverride (void)
++{
++	checkOverride ();
++	checkOverride ();
++}
++
++void
++testStruct (void)
++{
++	checkBehind ();
++	checkBehind ();
++	checkNested ();
++	checkNested ();
++	checkUnion ();
++	checkUnion ();
++}
++
++void
++testArray (void)
++{
++	checkArray ();
++	checkArray ();
++	checkElement ();
++	checkElement ();
++}
++
++void
++testGlobal (void)
++{
++	ASSERT (ga.a == 1);
++	ASSERT (ga.b == 0);
++	ASSERT (ga.c == 3);
++
++	ASSERT (gq.h == 1);
++	ASSERT (gq.p.a == 0);
++	ASSERT (gq.p.b == 2);
++	ASSERT (gq.p.c == 3);
++	ASSERT (gq.v[0] == 0);
++	ASSERT (gq.v[1] == 4);
++	ASSERT (gq.t == 6);
++
++	ASSERT (gv[0] == 3);
++	ASSERT (gv[1] == 0);
++	ASSERT (gv[2] == 4);
++	ASSERT (gv[3] == 5);
++
++	ASSERT (cb.a == 0);
++	ASSERT (cb.c == 42);
++}
