@@ -43,10 +43,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-2948.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 1f6209808..acf1558a8 100644
+index f07469364..8e0daba63 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -1328,14 +1328,26 @@ designatedIlist (sym_link *type, initList *ilist, initList **parts)
+@@ -1329,14 +1329,26 @@ designatedIlist (sym_link *type, initList *ilist, initList **parts)
    symbol *sflds = SPEC_STRUCT (type)->fields;
    bool asis = true;
  
@@ -75,7 +75,7 @@ index 1f6209808..acf1558a8 100644
        asis = false;
    if (asis || !sflds)
      return ilist->init.deep;
-@@ -1555,20 +1567,25 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+@@ -1556,20 +1568,25 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
        /* if we have come to end */
        else if (!iloop && (!AST_SYMBOL (rootValue)->islocal || SPEC_STAT (etype)))
          break;
@@ -147,10 +147,10 @@ index 9f305db03..0af7df227 100644
        int size;
        /* skip past holes, print value */
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index 6c5ca6202..8ca2e12b5 100644
+index 3edb41f71..fb97ee5f1 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
-@@ -2107,6 +2107,12 @@ promoteAnonStructs (structdef * sdef)
+@@ -2135,6 +2135,12 @@ promoteAnonStructs (structdef * sdef)
            if (!subfield)
              continue;           /* just in case it's empty */
  
@@ -163,7 +163,7 @@ index 6c5ca6202..8ca2e12b5 100644
            *tofield = subfield;
            for (;;)
              {
-@@ -2125,11 +2131,22 @@ promoteAnonStructs (structdef * sdef)
+@@ -2153,11 +2159,22 @@ promoteAnonStructs (structdef * sdef)
  
                subfield->offset += base;
                subfield->anonunionalias |= field->anonunionalias;
@@ -187,7 +187,7 @@ index 6c5ca6202..8ca2e12b5 100644
            tofield = &subfield->next;
          }
 diff --git a/src/SDCCsymt.h b/src/SDCCsymt.h
-index 5eac8ceef..4634a0a73 100644
+index bfec532bc..ff0f17a6f 100644
 --- a/src/SDCCsymt.h
 +++ b/src/SDCCsymt.h
 @@ -344,6 +344,9 @@ typedef struct symbol

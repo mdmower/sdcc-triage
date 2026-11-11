@@ -1,6 +1,6 @@
 # Not reproducible
 
-The reported behavior could not be reproduced, and no revision that fixed it was identified. Each entry lists what was tried.
+The behavior reported in the ticket could not be reproduced, and a revision with a fix for it was not identified. What was tried is listed in the entry.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

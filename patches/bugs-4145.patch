@@ -30,10 +30,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-4145.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 13bdf19ad..675b1d489 100644
+index b1cfa3185..9f4ec2c3c 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -2232,8 +2232,9 @@ constExprValue (ast * cexpr, int check)
+@@ -2233,8 +2233,9 @@ constExprValue (ast * cexpr, int check)
            return valCastLiteral (cexpr->ftype, floatFromVal (cexpr->right->opval.val), (TYPE_TARGET_ULONGLONG) ullFromVal (cexpr->right->opval.val));
          }
  
@@ -45,7 +45,7 @@ index 13bdf19ad..675b1d489 100644
          {
            value *ivalAsVal = list2val (AST_SYMBOL (cexpr)->ival, check);
            value *val = valRecastLitVal (cexpr->etype, ivalAsVal);
-@@ -3875,7 +3876,9 @@ rewriteStructAssignment (ast *tree)
+@@ -3876,7 +3877,9 @@ rewriteStructAssignment (ast *tree)
  void
  propagateConstExpr (ast **ptree, RESULT_TYPE resultType, bool reduceTypeAllowed)
  {
@@ -56,7 +56,7 @@ index 13bdf19ad..675b1d489 100644
      {
        ast *newAst = newAst_VALUE (constExprValue (*ptree, true));
        copyAstLoc (newAst, *ptree);
-@@ -6760,6 +6763,13 @@ typeofOp (ast *tree)
+@@ -6773,6 +6776,13 @@ typeofOp (ast *tree)
    SPEC_SCLS (spec_type) = 0;
    SPEC_STAT (spec_type) = 0;
    SPEC_EXTR (spec_type) = 0;

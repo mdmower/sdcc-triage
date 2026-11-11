@@ -1,6 +1,6 @@
 # No action recommended
 
-The reported behavior is correct, or the request conflicts with the C standard or with documented SDCC behavior. Each entry gives the reason.
+The behavior reported in the ticket is correct, or the request conflicts with the C standard or with the behavior described in SDCC's documentation. The reason is given in the entry.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

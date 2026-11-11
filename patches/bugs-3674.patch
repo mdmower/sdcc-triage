@@ -33,10 +33,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3674.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 61e61b653..09fc159e1 100644
+index 91397bc09..31ecbaabc 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -1044,7 +1044,7 @@ processParms (ast * func, value * defParm, ast ** actParm, int *parmNumber,
+@@ -1045,7 +1045,7 @@ processParms (ast * func, value * defParm, ast ** actParm, int *parmNumber,
        if (options.std_sdcc && (TARGET_IS_MCS51 || TARGET_IS_DS390 || TARGET_MOS6502_LIKE || TARGET_PIC_LIKE) &&
          IFFUNC_HASVARARGS (functype) &&
          (IS_CAST_OP (*actParm) ||

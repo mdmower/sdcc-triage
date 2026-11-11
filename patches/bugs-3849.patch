@@ -34,10 +34,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3849.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index e48df1739..440d68759 100644
+index b800e9ef0..a70e875ab 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -4028,6 +4028,31 @@ rewriteStructAssignment (ast *tree)
+@@ -4029,6 +4029,31 @@ rewriteStructAssignment (ast *tree)
    return decorateType (newTree, RESULT_TYPE_OTHER, true);
  }
  

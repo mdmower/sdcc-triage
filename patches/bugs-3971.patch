@@ -27,10 +27,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3971.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 6d2fa180b..13bdf19ad 100644
+index 6eed96f33..b1cfa3185 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -2215,7 +2215,7 @@ constExprValue (ast * cexpr, int check)
+@@ -2216,7 +2216,7 @@ constExprValue (ast * cexpr, int check)
      {
        /* then check if this is a literal array
           in code segment */

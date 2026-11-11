@@ -1,6 +1,6 @@
 # Information needed from the reporter
 
-The ticket cannot be judged without something only the reporter has. Each entry says what is missing.
+The ticket cannot be judged without something that only the reporter has. What is missing is stated in the entry.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

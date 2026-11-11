@@ -43,10 +43,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-4228.c
 
 diff --git a/src/SDCC.y b/src/SDCC.y
-index f677b7839..245e01282 100644
+index 7892838ae..95b6cc650 100644
 --- a/src/SDCC.y
 +++ b/src/SDCC.y
-@@ -262,7 +262,7 @@ postfix_expression
+@@ -264,7 +264,7 @@ postfix_expression
                             6.7.2p6), while a compound literal without a storage class has the
                             type written in it and nothing more (C11 6.5.2.5p4). */
                          sym1->etype = getSpec(sym1->type);
@@ -81,10 +81,10 @@ index f677b7839..245e01282 100644
            else if (!bitsize)
              {
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index acf1558a8..e48df1739 100644
+index 8e0daba63..b800e9ef0 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -2333,6 +2333,34 @@ constExprTree (ast *cexpr)
+@@ -2334,6 +2334,34 @@ constExprTree (ast *cexpr)
    return false;
  }
  
@@ -132,10 +132,10 @@ index 55fd649b4..540df19e9 100644
  symbol *funcOfType (const char *name, sym_link *rtype, sym_link *argtype, int nArgs, int rent);
  symbol *funcOfType2 (const char *name, sym_link *rtype, sym_link *largtype, sym_link *rargtype, int rent);
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index 8ca2e12b5..fafa525aa 100644
+index fb97ee5f1..07ef160a3 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
-@@ -6159,7 +6159,7 @@ prepareDeclarationSymbol (attribute *attr, sym_link *declSpecs, symbol *initDecl
+@@ -6187,7 +6187,7 @@ prepareDeclarationSymbol (attribute *attr, sym_link *declSpecs, symbol *initDecl
          if (IS_PTR (l0))
            break;
        /* perform sanity checks concerning constexpr initialization */

@@ -22,10 +22,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-4157.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 440d68759..1277a72a5 100644
+index a70e875ab..7483aae60 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -6709,7 +6709,9 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+@@ -6720,7 +6720,9 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
  
            typecompat = compareType (currFunc->type->next, RTYPE (tree), false);
  

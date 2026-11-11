@@ -1,6 +1,6 @@
 # Already fixed in trunk
 
-The reported behavior does not occur in trunk. Each entry names the revision that fixed it when that revision was identified.
+The behavior reported in the ticket does not occur in trunk. The revision in which it was fixed is given in the entry when that revision was identified.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

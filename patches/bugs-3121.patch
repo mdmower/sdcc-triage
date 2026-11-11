@@ -31,10 +31,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3121.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 09fc159e1..1f6209808 100644
+index 31ecbaabc..f07469364 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -1277,6 +1277,87 @@ findStructField (symbol *fields, symbol *target)
+@@ -1278,6 +1278,87 @@ findStructField (symbol *fields, symbol *target)
    return NULL; /* not found */
  }
  
@@ -122,7 +122,7 @@ index 09fc159e1..1f6209808 100644
  static int aggregateIsAutoVar = 0;
  
  /*-----------------------------------------------------------------*/
-@@ -1292,7 +1373,8 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+@@ -1293,7 +1374,8 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
    if (ilist && ilist->type != INIT_DEEP)
      return createIvalType (sym, type, ilist);
  
@@ -132,7 +132,7 @@ index 09fc159e1..1f6209808 100644
  
    set *initialized_fields = newSet ();
  
-@@ -1499,6 +1581,9 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+@@ -1500,6 +1582,9 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
      }
  
  release:
@@ -142,7 +142,7 @@ index 09fc159e1..1f6209808 100644
    deleteSet (&initialized_fields);
  
    return rast;
-@@ -1511,7 +1596,7 @@ static ast *
+@@ -1512,7 +1597,7 @@ static ast *
  createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
  {
    ast *rast = NULL;
@@ -151,7 +151,7 @@ index 09fc159e1..1f6209808 100644
    int lcnt = 0, size = 0, idx = 0;
    literalList *literalL;
    sym_link *etype = getSpec (type);
-@@ -1572,6 +1657,17 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
+@@ -1573,6 +1658,17 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
      }
    else
      {
@@ -169,7 +169,7 @@ index 09fc159e1..1f6209808 100644
        for (;;)
          {
            ast *aSym;
-@@ -1610,13 +1706,29 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
+@@ -1611,13 +1707,29 @@ createIvalArray (ast * sym, sym_link * type, initList * ilist, ast * rootValue)
                break;
              }
  

@@ -1,6 +1,6 @@
 # Analyzed, not fixed
 
-The problem is reproduced or located, and no patch is offered. Each entry says what is known and what a fix would involve.
+The problem is reproduced or located, and the fork does not have a patch for it. What is known, and what a fix would involve, is stated in the entry.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

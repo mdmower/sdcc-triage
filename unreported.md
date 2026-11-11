@@ -1,6 +1,6 @@
 # Problems without a ticket
 
-Problems found during this work that have no SourceForge ticket. Each entry has a reproducer.
+Problems found during this work that do not have SourceForge tickets. The entries have reproducers.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|

@@ -26,10 +26,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3836.c
 
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index a853eb185..6c5ca6202 100644
+index c452128a2..3edb41f71 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
-@@ -2867,6 +2867,9 @@ computeType (sym_link * type1, sym_link * type2, RESULT_TYPE resultType, int op)
+@@ -2895,6 +2895,9 @@ computeType (sym_link * type1, sym_link * type2, RESULT_TYPE resultType, int op)
    /* If difference between pointers or arrays then the result is a ptrdiff */
    else if ((op == '-') && (IS_PTR (type1) || IS_ARRAY (type1)) && (IS_PTR (type2) || IS_ARRAY (type2)))
      rType = newPtrDiffLink();

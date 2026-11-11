@@ -1,6 +1,6 @@
 # Duplicates
 
-The ticket reports a problem that another ticket already covers.
+The same problem is already reported in another ticket.
 
 | Ticket | Entry | Recommended action | Evidence |
 |---|---|---|---|
