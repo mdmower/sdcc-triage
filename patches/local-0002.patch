@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 22:21:43 -0800
+Subject: [PATCH] [local #0002] Do not crash on an initializer that is computed
+ by code
+
+SDCC computes an initializer that is not a constant expression by code
+when the object is not initialized from data, for example a variable
+at an absolute address or a static variable of a function. The code
+for a global variable is not part of a function. Two kinds of such
+initializers crashed the compiler.
+
+visit() in SDCClrange.c read past the last iCode when a temporary was
+alive there. The code of a function ends with ENDFUNCTION, and
+initializer code does not. An initializer with a conditional operator,
+such as (&x == &y) ? 1 : 2, has such a temporary. visit() now stops at
+the end of the code, and the compiler generates the code of the
+initializer. For a static variable of a function, eBBlockFromiCode()
+then warned that the function must return a value, because the last
+block of the initializer code does not end with a return statement.
+It now leaves initializer code out of this check.
+
+On mcs51, createStackSpil() allocates a spill location as a local
+variable of the current function, and currFunc is NULL for the code of
+a global variable. An initializer whose code needs a spill location,
+such as (unsigned long long)(unsigned)&x + (unsigned)&y, ended with a
+segmentation fault, and for a bit the compiler wrote a spill location
+with a name that sdas rejects. createStackSpil() now reports error 2
+(Initializer element is not a constant expression) and exits.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCClrange.c                              |  4 +-
+ src/SDCCopt.c                                 |  3 +-
+ src/mcs51/ralloc.c                            |  8 ++
+ .../regression/tests/initializer-by-code.c    | 61 ++++++++++++++
+ support/valdiag/tests/initializer-by-code.c   | 83 +++++++++++++++++++
+ 5 files changed, 157 insertions(+), 2 deletions(-)
+ create mode 100644 support/regression/tests/initializer-by-code.c
+ create mode 100644 support/valdiag/tests/initializer-by-code.c
+
+diff --git a/src/SDCClrange.c b/src/SDCClrange.c
+index 956867f1b..54530c5f4 100644
+--- a/src/SDCClrange.c
++++ b/src/SDCClrange.c
+@@ -1001,7 +1001,9 @@ static void visit (set **visited, iCode *ic, const int key)
+           break;
+         default:
+           ic = ic->next;
+-          if (!POINTER_SET (ic) && IC_RESULT (ic) && IS_SYMOP (IC_RESULT (ic)) && OP_SYMBOL_CONST (IC_RESULT (ic))->key == key)
++          /* The code that initializes a variable is not in a function, and
++             it can end while the symbol is alive. */
++          if (ic && !POINTER_SET (ic) && IC_RESULT (ic) && IS_SYMOP (IC_RESULT (ic)) && OP_SYMBOL_CONST (IC_RESULT (ic))->key == key)
+             {
+               addSet (visited, ic);
+               return;
+diff --git a/src/SDCCopt.c b/src/SDCCopt.c
+index 92f7c2db8..838c377ee 100644
+--- a/src/SDCCopt.c
++++ b/src/SDCCopt.c
+@@ -4032,7 +4032,8 @@ eBBlockFromiCode (iCode *ic)
+   if (!options.lessPedantic)
+     {
+       // this is a good place to check missing return values
+-      if (currFunc)
++      // the code that initializes the static variables of a function does not return
++      if (currFunc && GcurMemmap != statsg)
+         {
+           // the user is on his own with naked functions...
+           if (!IS_VOID(currFunc->etype) && !FUNC_ISNAKED(currFunc->type))
+diff --git a/src/mcs51/ralloc.c b/src/mcs51/ralloc.c
+index 3e32503f0..42807d58c 100644
+--- a/src/mcs51/ralloc.c
++++ b/src/mcs51/ralloc.c
+@@ -545,6 +545,14 @@ createStackSpil (symbol * sym)
+      we need to allocate this on the stack : this is really a
+      hack!! but cannot think of anything better at this time */
+ 
++  /* A spill location is a local variable of a function. The code that
++     initializes a global variable is not part of a function. */
++  if (!currFunc)
++    {
++      werror (E_CONST_EXPECTED);
++      exit (1);
++    }
++
+   dbuf_init (&dbuf, 128);
+   dbuf_printf (&dbuf, "sloc%d", _G.slocNum++);
+   sloc = newiTemp (dbuf_c_str (&dbuf));
+diff --git a/support/regression/tests/initializer-by-code.c b/support/regression/tests/initializer-by-code.c
+new file mode 100644
+index 000000000..5a9ecbbe8
+--- /dev/null
++++ b/support/regression/tests/initializer-by-code.c
+@@ -0,0 +1,61 @@
++/** initializer-by-code.c
++    SDCC accepts some initializers of objects with static storage duration
++    that are not constant expressions. Code that runs before main() computes
++    them.
++ */
++
++#include <testfwk.h>
++
++char x, y;
++char ar[4] = {11, 12, 13, 14};
++int vi = 1;
++
++/* The mcs51 small and medium models initialize global variables by code,
++   in the order of their definitions. */
++#if defined (__SDCC_mcs51) && (defined (__SDCC_MODEL_SMALL) || defined (__SDCC_MODEL_MEDIUM))
++#define GLOBALS_BY_CODE
++char elem = ar[1];
++int masked = vi & 1;
++char *elemPtr = &ar[vi];
++unsigned char diff = (unsigned)&ar[3] - (unsigned)&ar[1];
++int cond = (&x == &y) ? 1 : 2;
++char condElem = (&ar[1] != &ar[0]) ? ar[2] : ar[3];
++#endif
++
++void
++testGlobal (void)
++{
++#ifdef GLOBALS_BY_CODE
++  ASSERT (elem == 12);
++  ASSERT (masked == 1);
++  ASSERT (elemPtr == &ar[1]);
++  ASSERT (diff == 2);
++  ASSERT (cond == 2);
++  ASSERT (condElem == 13);
++#endif
++}
++
++int
++first (void)
++{
++  static int a = (&x == &y) ? 5 : 6;
++
++  return a;
++}
++
++int
++second (char c)
++{
++  static int a = (&x != &y) ? 7 : 8;
++  static char b = (&ar[1] > &ar[0]) ? 9 : 10;
++
++  return c ? a : b;
++}
++
++void
++testStatic (void)
++{
++  ASSERT (first () == 6);
++  ASSERT (second (1) == 7);
++  ASSERT (second (0) == 9);
++}
+diff --git a/support/valdiag/tests/initializer-by-code.c b/support/valdiag/tests/initializer-by-code.c
+new file mode 100644
+index 000000000..07b3dac3d
+--- /dev/null
++++ b/support/valdiag/tests/initializer-by-code.c
+@@ -0,0 +1,83 @@
++/* initializer-by-code.c
++
++   SDCC accepts some initializers of objects with static storage duration
++   that are not constant expressions. Code that runs before main() computes
++   them. The code for a global variable is not part of a function, and on
++   mcs51 only a function has spill locations.
++ */
++
++struct s { char a; int b[3]; };
++
++extern char x, y;
++extern char ar[4];
++extern char ar2[2][3];
++extern struct s st, sta[2];
++extern int vi;
++void fn (void);
++
++/* The sum needs a spill location for its 8 bytes. */
++#ifdef TEST1
++#ifdef __SDCC_mcs51
++unsigned long long a = (unsigned long long)(unsigned)&x + (unsigned)&y; /* ERROR(SDCC_mcs51) */
++#endif
++#endif
++
++/* Without --stack-auto, the result of the logical operation is a bit that
++   needs a spill location. */
++#ifdef TEST2
++#ifdef __SDCC_mcs51
++int a = &ar[1] && &ar[2]; /* ERROR(SDCC_mcs51 && !SDCC_STACK_AUTO) */
++#endif
++#endif
++
++/* The registers cannot hold the 8 bytes of the sum together with the
++   pointer to the variable. */
++#ifdef TEST3
++#ifdef __SDCC_mcs51
++__idata unsigned long long a = (unsigned long long)&x + 1; /* ERROR(SDCC_mcs51) */
++#endif
++#endif
++
++/* Addresses with a constant offset. */
++#ifdef TEST4
++char *p1 = &ar[1];
++char *p2 = ar + 2;
++char *p3 = 2 + ar;
++char *p4 = ar + 1 + 1;
++char *p5 = &ar2[1][2];
++int *p6 = &st.b[1];
++int *p7 = &sta[1].b[2];
++char *p8 = &(sta + 1)->a;
++char *p9 = (char *)&st + sizeof (int);
++const char *p10 = "abc" + 1;
++void (*p11) (void) = fn;
++
++char *f (void)
++{
++  static char *p = &ar[1];
++
++  return p;
++}
++#endif
++
++/* The mcs51 small model initializes these variables by code. */
++#ifdef TEST5
++#if defined (__SDCC_mcs51) && defined (__SDCC_MODEL_SMALL)
++char e = ar[1];
++int m = vi & 1;
++char *p = &ar[vi];
++int c = (&x == &y) ? 1 : 2;
++unsigned long long w = (unsigned long long)&x + 1;
++#endif
++#endif
++
++/* A static variable of a function with a conditional operator in its
++   initializer. */
++#ifdef TEST6
++int f (void)
++{
++  static int a = (&x == &y) ? 1 : 2;
++
++  return a;
++}
++#endif
