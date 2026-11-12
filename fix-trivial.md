@@ -1,6 +1,6 @@
 # Trivial fixes
 
-The source change is a few lines in one place. The diff is in the entry.
+The source change is a few lines in one place, and its diff is in the entry. Where the patch changes a test alone, the entry does not show a diff.
 
 | Ticket | Entry | Recommended action | Evidence | Patch |
 |---|---|---|---|---|

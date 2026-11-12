@@ -20,7 +20,7 @@ Its head is [`a5f3514be`](https://github.com/mdmower/sdcc/commits/a5f3514be1ff14
 | [Fixes](fix.md) | 13 |
 | [Fixes that need a decision](fix-decision.md) | 22 |
 | [Analyzed, not fixed](unresolved.md) | 5 |
-| [Problems without a ticket](unreported.md) | 0 |
+| [Problems without a ticket and without a patch](unreported.md) | 0 |
 
 526 more open tickets are still to be investigated, and those about the mcs51 port are investigated first.
 
@@ -35,7 +35,8 @@ that are only about other ports were not examined and do not have entries.
 ## Entries
 
 Entries are in `tickets/`, one per ticket. The category pages have tables of their entries, with
-the action recommended for each entry.
+the action recommended for each entry. The entries in `tickets/local/` are for problems found
+during this work that do not have SourceForge tickets.
 
 Read an entry with its ticket open. Ticket text is not repeated in entries, and comments and
 attachments are identified by their position in the ticket.

@@ -1,6 +1,6 @@
 # Fixes
 
-The cause is identified and the change is confined to it. The patch includes a regression test that fails without the change.
+The cause is identified and the change is confined to it. The patch includes a regression test that fails without the change. Exceptions are stated in their entries.
 
 | Ticket | Entry | Recommended action | Evidence | Patch |
 |---|---|---|---|---|

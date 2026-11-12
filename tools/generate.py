@@ -54,12 +54,13 @@ CATEGORIES = {
     ),
     "fix-trivial": (
         "Trivial fixes",
-        "The source change is a few lines in one place. The diff is in the entry.",
+        "The source change is a few lines in one place, and its diff is in the entry. Where the "
+        "patch changes a test alone, the entry does not show a diff.",
     ),
     "fix": (
         "Fixes",
         "The cause is identified and the change is confined to it. The patch includes a regression "
-        "test that fails without the change.",
+        "test that fails without the change. Exceptions are stated in their entries.",
     ),
     "fix-decision": (
         "Fixes that need a decision",
@@ -72,9 +73,10 @@ CATEGORIES = {
         "known, and what a fix would involve, is stated in the entry.",
     ),
     "unreported": (
-        "Problems without a ticket",
-        "Problems found during this work that do not have SourceForge tickets. The entries have "
-        "reproducers.",
+        "Problems without a ticket and without a patch",
+        "Problems found during this work that do not have SourceForge tickets and that the fork "
+        "does not fix. The entries have reproducers. The problems without a ticket that the fork "
+        "fixes are the `local` entries of the three fix categories.",
     ),
 }
 FIX_CATEGORIES = ("fix-trivial", "fix", "fix-decision")
