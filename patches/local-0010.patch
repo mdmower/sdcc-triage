@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 17:26:32 -0800
+Subject: [PATCH] [local #0010] sdld: adjust the T line offset after a byte
+ with an R_BYT3 relocation
+
+For a byte that has a relocation, the assemblers for mcs51, ds390,
+stm8, and the Rabbit targets write a_bytes bytes to the T line and set
+R_BYT3 in the mode. The linker outputs one of these bytes. relr3()
+counts in rtofst the T line bytes in front of a field that are not
+output, and it did not count the other bytes of such a field unless
+the mode also had R3_BYTX. The address that relr3() computed for
+each later field of the T line was therefore too high by a_bytes -
+1, which is 2 for mcs51 and stm8.
+
+The displacement of a PC-relative byte was too low by the same
+amount. With sdas8051, 'jz 0x0000' and 'jb 0x00,0x0000' at address
+0 linked to 60 FE 20 00 F9, where 60 FE 20 00 FB is correct. The
+assemblers compute the displacement themselves when the destination
+is a label in the area of the branch. The linker computes it when
+the destination is an absolute address, a label in another area, or
+an external symbol. The page checks for the 11-bit and 19-bit jumps
+and the offset in error messages used the same address.
+
+relr3() now adds a_bytes - 1 to rtofst for a byte with R_BYT3 and
+without R3_BYTX. It does this after the error processing, so the offset
+in an error message for the first such byte of a T line is unchanged.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ sdas/linksrc/lkrloc3.c                        | 16 ++++++
+ .../regression/tests/relative-branch-reloc.c  | 52 +++++++++++++++++++
+ 2 files changed, 68 insertions(+)
+ create mode 100644 support/regression/tests/relative-branch-reloc.c
+
+diff --git a/sdas/linksrc/lkrloc3.c b/sdas/linksrc/lkrloc3.c
+index 344bc1373..80fff85d6 100644
+--- a/sdas/linksrc/lkrloc3.c
++++ b/sdas/linksrc/lkrloc3.c
+@@ -686,6 +686,22 @@ relr3(void)
+ 				}
+ 			}
+ 		}
++
++/* sdld specific */
++                /*
++                 * R3_BYTE with R_BYT3 offset adjust
++                 *
++                 * The T line has a_bytes bytes for the byte, and one
++                 * of them is output. With R3_BYTX the adjustment is
++                 * made above. This one is made after the error
++                 * processing, so that the offset in an error message
++                 * is the one of the byte in front of the output byte.
++                 */
++                if ((mode & R3_BYTE) && (mode & R_BYT3) &&
++                    !(mode & R3_BYTX)) {
++                        rtofst += (a_bytes - 1);
++                }
++/* end sdld specific */
+ 	}
+ 	if (uflag != 0) {
+ 		lkulist(1);
+diff --git a/support/regression/tests/relative-branch-reloc.c b/support/regression/tests/relative-branch-reloc.c
+new file mode 100644
+index 000000000..ccda615d2
+--- /dev/null
++++ b/support/regression/tests/relative-branch-reloc.c
+@@ -0,0 +1,52 @@
++/** Relative branches of mcs51 to absolute addresses.
++
++    The linker computes the displacement of such a branch. It made the
++    displacement too low by 2 when a byte with a relocation was in front of
++    the displacement in the same T line of the object file.
++*/
++#include <testfwk.h>
++
++#ifdef __SDCC_mcs51
++__data unsigned char path;
++__data unsigned char count;
++
++/* The assembler begins a new T line at each label, so the direct address
++   and the displacement that follow a label are in one T line. Each
++   subroutine sets one bit of path. A branch with a displacement that is too
++   low by 2 arrives at the first of the two ret instructions behind it. */
++void
++branch (void)
++{
++  __asm
++	lcall	pcr_sjmp
++	lcall	pcr_djnz
++	.area	PCRABS (ABS,CODE)
++	.org	0xf800
++pcr_sjmp:
++	mov	a, _path		; 0xf800
++	sjmp	0xf806			; 0xf802
++	ret				; 0xf804
++	ret				; 0xf805
++	orl	_path, #0x01		; 0xf806
++	ret				; 0xf809
++pcr_djnz:
++	djnz	_count, 0xf80f		; 0xf80a
++	ret				; 0xf80d
++	ret				; 0xf80e
++	orl	_path, #0x02		; 0xf80f
++	ret				; 0xf812
++	.area	CSEG (CODE)
++  __endasm;
++}
++#endif
++
++void
++testBranch (void)
++{
++#ifdef __SDCC_mcs51
++  path = 0;
++  count = 2;
++  branch ();
++  ASSERT (path == 0x03);
++#endif
++}

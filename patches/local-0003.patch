@@ -1,0 +1,401 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 17:10:47 -0800
+Subject: [PATCH] [local #0003] Initialize the object of a compound literal
+ each time the literal is evaluated
+
+gatherAutoInit initialized the objects of the compound literals in a
+function body at the start of the innermost block, together with the
+variables of that block. The initializer was evaluated once for each
+entry into the block, with the values that its operands had at that
+point. In
+
+    x = x + 1;
+    return (int){x};
+
+the function returned the value that x had before the addition. Under a
+case label, and after a goto into the block, the object was not
+initialized. gatherImplicitVariables did not visit the three expressions
+of a for statement, so the object of a literal in one of them did not
+get storage, and the assembler rejected the output.
+
+gatherImplicitVariables now sets the symbol flag complitobj on these
+objects and visits the expressions of for statements. For an object with
+the flag, gatherAutoInit calls the new function placeCompLitInit, which
+puts the initialization in front of the statement that evaluates the
+literal. When the literal is in the right operand of &&, ||, or the
+comma operator, in the second or third operand of ?:, or in an
+expression of a for statement, the initialization becomes the left
+operand of a comma operator in that operand. A literal in the operand of
+sizeof is not initialized. A literal in the initializer of a declaration
+is still initialized in front of the initialization of that declaration.
+
+Adds tests/compound-literal-eval.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                                 |  86 +++++++
+ src/SDCCsymt.h                                |   1 +
+ .../regression/tests/compound-literal-eval.c  | 220 ++++++++++++++++++
+ 3 files changed, 307 insertions(+)
+ create mode 100644 support/regression/tests/compound-literal-eval.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 16aa17072..6e9e9e6b8 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -79,6 +79,7 @@ ast *optimizeGetWord (ast *, RESULT_TYPE);
+ static ast *backPatchLabels (ast *, symbol *, symbol *);
+ static void copyAstLoc (ast *, ast *);
+ static ast *gatherAutoInit (symbol *, ast *, int *);
++static bool placeCompLitInit (ast **, long, ast *, symbol *, ast *);
+ void gatherImplicitVariables (ast *, ast *);
+ void PA (ast * t);
+ int inInitMode = 0;
+@@ -2090,6 +2091,12 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
+           // if this is a constexpr, keep the ival for compile-time evaluation
+           if (!(IS_CONSTEXPR (sym->etype)))
+             sym->ival = NULL;
++          /* The object of a compound literal gets its value each time the literal is
++             evaluated, and not when control enters the block. A literal in an initializer
++             is not in the tree of the block yet, and the caller puts its initialization
++             in front of the initialization that reads it. */
++          if (sym->complitobj && block && placeCompLitInit (NULL, NULLOP, block, sym, work))
++            continue;
+           if (init)
+             init = newNode (NULLOP, init, work);
+           else
+@@ -3351,6 +3358,76 @@ getLeftResultType (ast * tree, RESULT_TYPE resultType)
+     }
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* placeCompLitInit - puts INIT, which initializes the object SYM  */
++/*                    of a compound literal, in front of the       */
++/*                    statement or expression in TREE that         */
++/*                    evaluates the literal. *PLACE is the nearest */
++/*                    statement (OP is NULLOP) or expression (OP   */
++/*                    is ',') whose evaluation always includes     */
++/*                    TREE. Returns false if the literal is not    */
++/*                    in TREE                                      */
++/*-----------------------------------------------------------------*/
++static bool
++placeCompLitInit (ast **place, long op, ast *tree, symbol *sym, ast *init)
++{
++  ast **rplace = place;
++  long rop = op;
++
++  if (!tree)
++    return false;
++
++  if (IS_AST_SYM_VALUE (tree) && isSymbolEqual (AST_SYMBOL (tree), sym))
++    {
++      init = newNode (op, init, *place);
++      copyAstLoc (init, *place);
++      *place = init;
++      return true;
++    }
++
++  if (!IS_AST_OP (tree))
++    return false;
++
++  /* decorateType() does not visit the operands of a node that it has decorated,
++     so a new node goes above such a node. */
++  if (!tree->decorated)
++    switch (tree->opval.op)
++      {
++      case SIZEOF:
++      case COUNTOF:
++        /* The operand is not evaluated, so a literal in it does not need its value. */
++        return astHasSymbol (tree->right, sym);
++      case FOR:
++        if (placeCompLitInit (&AST_FOR (tree, initExpr), ',', AST_FOR (tree, initExpr), sym, init) ||
++            placeCompLitInit (&AST_FOR (tree, condExpr), ',', AST_FOR (tree, condExpr), sym, init) ||
++            placeCompLitInit (&AST_FOR (tree, loopExpr), ',', AST_FOR (tree, loopExpr), sym, init))
++          return true;
++        /* fall through */
++      case BLOCK:
++      case NULLOP:
++      case LABEL:
++      case CRITICAL:
++        /* The operands are statements. */
++        place = &tree->left;
++        rplace = &tree->right;
++        op = rop = NULLOP;
++        break;
++      case ':':
++        place = &tree->left;
++        op = ',';
++        /* fall through */
++      case AND_OP:
++      case OR_OP:
++      case ',':
++        /* The right operand is evaluated after the left one, or not at all. */
++        rplace = &tree->right;
++        rop = ',';
++        break;
++      }
++
++  return placeCompLitInit (place, op, tree->left, sym, init) || placeCompLitInit (rplace, rop, tree->right, sym, init);
++}
++
+ /*------------------------------------------------------------------*/
+ /* gatherImplicitVariables:  adds the symbols created by            */
+ /*            replaceAstWithTemporary to the declarations list of   */
+@@ -3408,9 +3485,18 @@ gatherImplicitVariables (ast *tree, ast *block)
+ 
+           *decl = tempsym;
+           AST_SYMBOL (tree)->iscomplit = false;
++          tempsym->complitobj = true;
+         }
+     }
+ 
++  /* the expressions of a for statement are not operands of its node */
++  if (IS_FOR_STMT (tree))
++    {
++      gatherImplicitVariables (AST_FOR (tree, initExpr), block);
++      gatherImplicitVariables (AST_FOR (tree, condExpr), block);
++      gatherImplicitVariables (AST_FOR (tree, loopExpr), block);
++    }
++
+   /* If entering a block with symbols defined, mark the symbols in-scope */
+   /* before continuing down the tree, and mark them out-of-scope again   */
+   /* on the way back up */
+diff --git a/src/SDCCsymt.h b/src/SDCCsymt.h
+index ff0f17a6f..7cf3874af 100644
+--- a/src/SDCCsymt.h
++++ b/src/SDCCsymt.h
+@@ -326,6 +326,7 @@ typedef struct symbol
+   unsigned undefined:1;             /* undefined variable                */
+   bool implicitaddtoblock:1;        /* implicit temporary to be added to block later, once that block exists */
+   unsigned iscomplit:1;             /* is a temporary symbol for a compound literal */
++  unsigned complitobj:1;            /* is the object of a compound literal, in the declarations list of a block */
+   unsigned _isparm:1;               /* is a parameter          */
+   unsigned ismyparm:1;              /* is parameter of the function being generated */
+   unsigned isitmp:1;                /* is an intermediate temp */
+diff --git a/support/regression/tests/compound-literal-eval.c b/support/regression/tests/compound-literal-eval.c
+new file mode 100644
+index 000000000..b8706c843
+--- /dev/null
++++ b/support/regression/tests/compound-literal-eval.c
+@@ -0,0 +1,220 @@
++/* compound-literal-eval.c
++   The object of a compound literal in a function body gets its value each
++   time the literal is evaluated, and only then.
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC
++#pragma std_c99
++#endif
++
++struct s
++{
++  char a;
++  char b;
++};
++
++static unsigned char calls;
++
++static int
++count (int v)
++{
++  calls++;
++  return v;
++}
++
++static int
++deref (const int *p)
++{
++  return *p;
++}
++
++static char
++sum (const struct s *p)
++{
++  return p->a + p->b;
++}
++
++/* Under a case label, where the start of the block is never executed. */
++static int
++underCase (unsigned char op, int x)
++{
++  int y = 0;
++
++  switch (op)
++    {
++    case 0:
++      y = x ? 4 : (int){3};
++      break;
++    case 1:
++      y = (int){x};
++      break;
++    }
++  return y;
++}
++
++/* The initializer names a variable that changes after the start of the block. */
++static int
++afterChange (int x)
++{
++  x = x + 1;
++  return (int){x};
++}
++
++/* The literal is evaluated several times, in a loop body that is not a block. */
++static int
++inLoop (void)
++{
++  int s = 0;
++  unsigned char i;
++
++  for (i = 0; i < 3; i++)
++    s += (int){i + 1};
++  return s;
++}
++
++/* The object gets its value again each time. */
++static int
++eachTime (void)
++{
++  int s = 0;
++  unsigned char i;
++
++  for (i = 0; i < 3; i++)
++    s += ++(int){10};
++  return s;
++}
++
++/* Reached by a goto past the start of the block. */
++static int
++afterGoto (int x)
++{
++  int y;
++
++  goto skip;
++  y = 9;
++skip:
++  y = x ? 4 : (int){3};
++  return y;
++}
++
++/* The address, a member, and an element of the literal. */
++static int
++asLvalue (char x)
++{
++  int r;
++
++  x++;
++  r = deref (&(int){x});
++  r += (struct s){x, 2}.a;
++  r += (char[]){1, x, 3}[1];
++  r += sum (&(struct s){x, x});
++  return r;
++}
++
++/* The initializer is evaluated only when the literal is. */
++static int
++conditional (unsigned char c)
++{
++  int r;
++
++  calls = 0;
++  r = c ? (int){count (5)} : 7;
++  if (c && (int){count (1)})
++    r++;
++  r += c || (int){count (1)};
++  return r;
++}
++
++/* In the controlling expressions of loops. */
++static unsigned char
++inControl (unsigned char n)
++{
++  unsigned char i = 0;
++  unsigned char r = 0;
++
++  while ((unsigned char){i} < n)
++    i++;
++  r += i;
++  for (i = 0; i < (unsigned char){n}; i += (unsigned char){r})
++    r++;
++  do
++    r++;
++  while ((unsigned char){r} < 12);
++  return r;
++}
++
++/* After the left operand of a comma operator. */
++static int
++afterComma (int x)
++{
++  int y;
++
++  y = (x = x + 5, (int){x});
++  return y;
++}
++
++static struct s
++retStruct (char x)
++{
++  x++;
++  return (struct s){x, x + 1};
++}
++
++/* A literal in the initializer of another one. */
++static int
++nested (int x)
++{
++  x++;
++  return (int){(int){x} + 1};
++}
++
++static inline int
++inl (int x)
++{
++  x++;
++  return (int){x};
++}
++
++void
++testCase (void)
++{
++  ASSERT (underCase (0, 0) == 3);
++  ASSERT (underCase (0, 1) == 4);
++  ASSERT (underCase (1, 7) == 7);
++  ASSERT (afterGoto (0) == 3);
++}
++
++void
++testPoint (void)
++{
++  ASSERT (afterChange (1) == 2);
++  ASSERT (inLoop () == 6);
++  ASSERT (eachTime () == 33);
++  ASSERT (afterComma (1) == 6);
++  ASSERT (nested (1) == 3);
++  ASSERT (inl (1) == 2);
++  ASSERT (inl (5) + inl (7) == 14);
++}
++
++void
++testLvalue (void)
++{
++  struct s v;
++
++  ASSERT (asLvalue (4) == 25);
++  v = retStruct (2);
++  ASSERT (v.a == 3);
++  ASSERT (v.b == 4);
++}
++
++void
++testEvaluated (void)
++{
++  ASSERT (conditional (0) == 8);
++  ASSERT (calls == 1);
++  ASSERT (conditional (1) == 7);
++  ASSERT (calls == 2);
++  ASSERT (inControl (3) == 12);
++}

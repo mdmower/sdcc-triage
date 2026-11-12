@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 11 Nov 2026 17:06:50 -0800
+Subject: [PATCH] [local #0007] ptrPseudoSymConvert: clear isaddr on the result
+ of the assignment
+
+In '*a[1][1]' and '*st.names[1]' the pointer is an element of an array
+that is itself an array element or a structure member. For these,
+geniCodeRValue returns the result operand of the GET_VALUE_AT_ADDRESS
+iCode that reads the pointer, and geniCodeDerefPtr sets isaddr on that
+operand.
+
+When the result of such an iCode becomes a pseudo symbol,
+ptrPseudoSymConvert changes the iCode into an assignment of the result
+to itself. It kept isaddr on the result, and an assignment whose result
+has isaddr set is a pointer set. The mcs51 code generator then generated
+a store of the pointer's bytes to the object that the pointer points to,
+ahead of the read. With 'long *a[2][2]' in data memory and
+'a[1][1] = &v', the code for 'return *a[1][1]' replaced three bytes of
+'v' with the pointer.
+
+ptrPseudoSymConvert now clears isaddr on a copy of the result operand,
+as cseBBlock does where it changes a pointer read into an assignment.
+
+Adds tests/deref-ptr-array-elem.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCptropt.c                              |  2 +
+ .../regression/tests/deref-ptr-array-elem.c   | 90 +++++++++++++++++++
+ 2 files changed, 92 insertions(+)
+ create mode 100644 support/regression/tests/deref-ptr-array-elem.c
+
+diff --git a/src/SDCCptropt.c b/src/SDCCptropt.c
+index 7ddaa48c7..df4efc0ef 100644
+--- a/src/SDCCptropt.c
++++ b/src/SDCCptropt.c
+@@ -414,6 +414,8 @@ ptrPseudoSymConvert (symbol * sym, iCode * dic, const char *name)
+   /* now this really is an assignment to itself, make it so;
+      it will be optimized out later */
+   dic->op = '=';
++  /* an assignment whose result is marked as an address is a pointer set */
++  SET_ISADDR (IC_RESULT (dic), 0);
+   ReplaceOpWithCheaperOp (&IC_RIGHT (dic), IC_RESULT (dic));
+   IC_LEFT (dic) = NULL;
+ #endif
+diff --git a/support/regression/tests/deref-ptr-array-elem.c b/support/regression/tests/deref-ptr-array-elem.c
+new file mode 100644
+index 000000000..c7e7e05a3
+--- /dev/null
++++ b/support/regression/tests/deref-ptr-array-elem.c
+@@ -0,0 +1,90 @@
++/* deref-ptr-array-elem.c
++   For a read through a pointer that is an element of an array of pointers,
++   SDCC generated mcs51 code that first stored the bytes of the pointer in
++   the object that the pointer points to. It did so for arrays in data
++   memory that are themselves an element of an array or a member of a
++   struct.
++ */
++
++#include <testfwk.h>
++
++struct s
++{
++  char c;
++  char *names[2];
++};
++
++long v, v0;
++char buf[3];
++__data int w;
++
++long * __data a[2][2];
++__data struct s st;
++int __data * __data np[2][2]; /* one-byte pointers on mcs51 */
++
++long
++readNested (void)
++{
++  return *a[1][1];
++}
++
++long
++readFirst (void)
++{
++  return *a[0][0];
++}
++
++char
++readMember (void)
++{
++  return *st.names[1];
++}
++
++int
++readNear (void)
++{
++  return *np[1][0];
++}
++
++void
++testNested (void)
++{
++  v = 0x11223344;
++  v0 = 0x55667788;
++  a[1][1] = &v;
++  a[0][0] = &v0;
++
++  ASSERT (readNested () == 0x11223344);
++  ASSERT (v == 0x11223344);
++  ASSERT (a[1][1] == &v);
++
++  ASSERT (readFirst () == 0x55667788);
++  ASSERT (v0 == 0x55667788);
++  ASSERT (a[0][0] == &v0);
++}
++
++void
++testMember (void)
++{
++  buf[0] = 0x55;
++  buf[1] = 0x66;
++  buf[2] = 0x77;
++  st.names[1] = buf;
++
++  ASSERT (readMember () == 0x55);
++  ASSERT (buf[0] == 0x55);
++  ASSERT (buf[1] == 0x66);
++  ASSERT (buf[2] == 0x77);
++  ASSERT (st.names[1] == buf);
++}
++
++void
++testNear (void)
++{
++  w = 0x12f0;
++  np[1][0] = &w;
++
++  ASSERT (readNear () == 0x12f0);
++  ASSERT (w == 0x12f0);
++  ASSERT (np[1][0] == &w);
++}
