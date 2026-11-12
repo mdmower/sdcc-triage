@@ -45,3 +45,5 @@ local-0001.patch
 local-0002.patch
 local-0006.patch
 local-0004.patch
+bugs-4070.patch
+bugs-3973.patch

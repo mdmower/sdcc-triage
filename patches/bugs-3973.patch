@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 02:38:24 -0800
+Subject: [PATCH] [bugs #3973] Initialize an integer with the label of a string
+ literal
+
+For a string literal, constExprValue() returns a value that is flagged
+as a literal, has the name of the string, and has the compiler's own
+pointer to the characters as its number. list2val() removes a cast, so
+printIvalType() received this value for an integer that is initialized
+by data with a cast of a string literal, and it printed the number. The
+integer got bytes of a host address, and these bytes differ from one
+run of the compiler to the next. When only integers referred to a
+literal, the string was not emitted. A float got the number as its
+value, and printIvalBitFields() put bits of the number into a
+bit-field. The fault occurred on mcs51, stm8, and z80.
+
+printIvalType() now prints the address of the string by name, in the
+loop that prints the address of an object, and enters the string in
+ccpStr so that emitStaticSeg() emits it. On ports that tag generic
+pointers, the byte above the address is the tag for code memory. The
+code that mcs51 generates for the same cast stores this tag. A bool
+gets the value 1, because the address is not a null pointer. A float
+and a bit-field cannot hold an address. Such an initializer is now
+error 2 (Initializer element is not a constant expression).
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCglue.c                      |  37 +++++++++-
+ support/regression/tests/bug-3973.c | 102 ++++++++++++++++++++++++++++
+ support/valdiag/tests/bug-3973.c    |  29 ++++++++
+ 3 files changed, 165 insertions(+), 3 deletions(-)
+ create mode 100644 support/regression/tests/bug-3973.c
+ create mode 100644 support/valdiag/tests/bug-3973.c
+
+diff --git a/src/SDCCglue.c b/src/SDCCglue.c
+index b0c3bee52..4232d9540 100644
+--- a/src/SDCCglue.c
++++ b/src/SDCCglue.c
+@@ -851,14 +851,28 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+ {
+   value *val;
+   unsigned long ulVal = 0;
++  bool strlit;
+ 
+   /* if initList is deep */
+   if (ilist && (ilist->type == INIT_DEEP))
+     ilist = ilist->init.deep;
+ 
+-  if (!(val = list2val (ilist, false)))
++  val = list2val (ilist, false);
++
++  /* The value of a string literal is flagged as a literal and has the name
++     of the string, but its number is the compiler's own pointer to the
++     characters. An integer gets the address of the string, by name. */
++  strlit = val && IS_LITERAL (val->etype) && val->sym && val->sym->isstrlit;
++  if (strlit && IS_BOOLEAN (type))
+     {
+-      if (!!(val = initPointer (ilist, type, 0)))
++      /* this address is not a null pointer */
++      val = constBoolVal (true, false);
++      strlit = false;
++    }
++
++  if (!val || strlit)
++    {
++      if (strlit ? IS_INTEGRAL (type) : !!(val = initPointer (ilist, type, 0)))
+         {
+           int i, size = getSize (type), le = port->little_endian, top = (options.model == MODEL_FLAT24) ? 3 : 2;;
+           dbuf_tprintf (oBuf, "\t!db ");
+@@ -874,6 +888,9 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+                   dbuf_printf (oBuf, "(%s >> %d)", val->name, i * 8);
+                 else
+                   dbuf_printf (oBuf, "#0x00");
++              else if (i == top && strlit && GPTRSIZE > FARPTRSIZE)
++                /* generic pointers have a tag, and a cast of one to an integer keeps it */
++                dbuf_printf (oBuf, "#0x%02x", GPTYPE_CODE);
+               else
+                 dbuf_printf (oBuf, "#0x00");
+               if (i == (le ? (size - 1) : 0))
+@@ -881,6 +898,19 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+               else
+                 dbuf_printf (oBuf, ", ");
+             }
++          if (strlit)
++            {
++              /* the string has to be emitted, as in printIvalCharPtr() */
++              char *p;
++
++              if (!!(p = (char *) malloc (strlen (val->sym->name) + 1)))
++                {
++                  strcpy (p, val->sym->name);
++                  addSet (&ccpStr, p);
++                }
++              if (!noInit && !isinSet (statsg->syms, val->sym))
++                addSet (&statsg->syms, val->sym);
++            }
+           return;
+         }
+       else
+@@ -1002,7 +1032,8 @@ printIvalBitFields (symbol ** sym, initList ** ilist, struct dbuf_s *oBuf)
+           /* not an unnamed bit-field structure member */
+           value *val = list2val (lilist, true);
+ 
+-          if (val && val->etype && SPEC_SCLS (val->etype) != S_LITERAL)
++          /* the value of a string literal is flagged as a literal, but it is an address */
++          if (val && val->etype && (SPEC_SCLS (val->etype) != S_LITERAL || val->sym && val->sym->isstrlit))
+             {
+               werrorfl (lilist->filename, lilist->lineno, E_CONST_EXPECTED);
+               val = constCharVal (0);
+diff --git a/support/regression/tests/bug-3973.c b/support/regression/tests/bug-3973.c
+new file mode 100644
+index 000000000..4932ef0e2
+--- /dev/null
++++ b/support/regression/tests/bug-3973.c
+@@ -0,0 +1,102 @@
++/** bug-3973.c
++    An integer in initialized data got bytes of the compiler's own address
++    of a string literal when a cast of the literal initialized it.
++ */
++
++#include <testfwk.h>
++
++#include <stddef.h>
++#include <stdint.h>
++
++struct my_data_t
++{
++  const char *a;
++  const void *b;
++  uintptr_t c;
++};
++
++/* the object of the ticket */
++const struct my_data_t my_data2 = { "AAA", "AAA", (uintptr_t)"AAA" };
++
++/* only an integer refers to each of these literals */
++uintptr_t var = (uintptr_t)"BC";
++const uintptr_t cst = (uintptr_t)"DE";
++const uintptr_t arr[2] = { (uintptr_t)"FG", (uintptr_t)"HI" };
++const intptr_t sgn = (intptr_t)"JK";
++const uintptr_t wide = (uintptr_t)L"LM";
++
++#ifdef __SDCC
++/* an integer that is wider than a pointer on some ports */
++const unsigned long wider = (unsigned long)"NO";
++/* the address of a string literal is not a null pointer */
++const _Bool nonNull = (_Bool)"PQ";
++#endif
++
++#ifdef __SDCC_mcs51
++/* an integer that is narrower than a generic pointer */
++const unsigned int narrower = (unsigned int)"RS";
++#endif
++
++#define STR(u) ((const char *) (u))
++#define WSTR(u) ((const wchar_t *) (u))
++
++static uintptr_t
++getLocal (void)
++{
++  static const uintptr_t loc = (uintptr_t)"TU";
++
++  return loc;
++}
++
++void
++testStruct (void)
++{
++  ASSERT (my_data2.a[0] == 'A');
++  ASSERT (STR (my_data2.b)[1] == 'A');
++  ASSERT (STR (my_data2.c)[0] == 'A');
++  ASSERT (STR (my_data2.c)[2] == 'A');
++  ASSERT (STR (my_data2.c)[3] == 0);
++}
++
++void
++testScalar (void)
++{
++  ASSERT (STR (var)[0] == 'B');
++  ASSERT (STR (var)[1] == 'C');
++  ASSERT (STR (var)[2] == 0);
++
++  ASSERT (STR (cst)[0] == 'D');
++  ASSERT (STR (cst)[1] == 'E');
++
++  ASSERT (STR (arr[0])[0] == 'F');
++  ASSERT (STR (arr[0])[1] == 'G');
++  ASSERT (STR (arr[1])[0] == 'H');
++  ASSERT (STR (arr[1])[1] == 'I');
++
++  ASSERT (STR (sgn)[0] == 'J');
++  ASSERT (STR (sgn)[1] == 'K');
++
++  ASSERT (WSTR (wide)[0] == L'L');
++  ASSERT (WSTR (wide)[1] == L'M');
++
++  ASSERT (STR (getLocal ())[0] == 'T');
++  ASSERT (STR (getLocal ())[1] == 'U');
++}
++
++void
++testSize (void)
++{
++#ifdef __SDCC
++  ASSERT (STR ((uintptr_t) wider)[0] == 'N');
++  ASSERT (STR ((uintptr_t) wider)[1] == 'O');
++  /* the bytes above the pointer are zero */
++  ASSERT ((unsigned long) (uintptr_t) wider == wider);
++
++  ASSERT (nonNull);
++#endif
++
++#ifdef __SDCC_mcs51
++  ASSERT (((const char __code *) narrower)[0] == 'R');
++  ASSERT (((const char __code *) narrower)[1] == 'S');
++#endif
++}
+diff --git a/support/valdiag/tests/bug-3973.c b/support/valdiag/tests/bug-3973.c
+new file mode 100644
+index 000000000..6860929cb
+--- /dev/null
++++ b/support/valdiag/tests/bug-3973.c
+@@ -0,0 +1,29 @@
++/* bug-3973.c
++
++   A bit-field that is initialized by data with a cast of a string literal
++   got bits of the compiler's own address of the literal, and a float got
++   that address as its value. Neither can hold an address, so these
++   initializers are errors. An integer that is not a bit-field takes the
++   address.
++ */
++
++#include <stdint.h>
++
++#ifdef TEST1
++struct bf
++{
++  unsigned int a : 4;
++  unsigned int b : 12;
++};
++
++const struct bf s = { 1, (unsigned int)"AB" }; /* ERROR */
++#endif
++
++#ifdef TEST2
++const float f = (float)"CD"; /* ERROR */
++#endif
++
++#ifdef TEST3
++const uintptr_t u = (uintptr_t)"EF";
++uintptr_t v = (uintptr_t)"GH";
++#endif

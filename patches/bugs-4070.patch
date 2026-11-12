@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 03:04:50 -0800
+Subject: [PATCH] [bugs #4070] sdas8051: evaluate expressions with 32 bits
+
+The address of an __sfr32 is one 32-bit constant that holds four 8-bit
+addresses, and the compiler selects each of them with an expression
+such as ((_X >> 24) & 0xFF). minit() called exprmasks(3), which sets
+both the number of address bytes in the T lines and the width of
+expression values. rngchk() therefore sign-extended every constant
+from bit 23, and 0xa4a5a6a7 became 0xffa5a6a7. Bit 23 is set in every
+list of four SFR addresses, so the most significant byte of every
+__sfr32 was read from and written to address 0xff.
+
+minit() now calls exprmasks(4) and then sets a_bytes to 3. Expression
+values have 32 bits, and the format of the object file is unchanged.
+The S line of such a symbol has the 32-bit value, and sdld masks it to
+24 bits as before.
+
+The results of other expressions change when a value does not fit in
+24 bits as a signed number. Constants from 0x800000 to 0xffffff are
+positive, so 0x800000 >> 20 is 0x08 where it was 0xf8, and
+'.iflt 0x800000' is false. Constants above 0xffffff are not
+truncated, so 0x12345678 >> 16 is 0x1234 where it was 0x0034, and
+'.ifeq 0x1000000' is false. 'mov 0x1000080,a' gets the error
+"Page 0 Address Error" where it was assembled as 'mov 0x80,a'. The
+option -v made rngchk() report the values that do not fit in 24 bits.
+rngchk() does not check values when the width is 32 bits.
+
+Adds tests/bug-4070.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ sdas/as8051/i51mch.c                |  7 ++-
+ support/regression/tests/bug-4070.c | 79 +++++++++++++++++++++++++++++
+ 2 files changed, 85 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-4070.c
+
+diff --git a/sdas/as8051/i51mch.c b/sdas/as8051/i51mch.c
+index bcbca25ba..77eca2d0e 100644
+--- a/sdas/as8051/i51mch.c
++++ b/sdas/as8051/i51mch.c
+@@ -806,8 +806,13 @@ minit(void)
+ 
+ 	/*
+ 	 * Address Space
++	 *
++	 * Expressions are evaluated with 32 bits, because the
++	 * address of an __sfr32 is a list of four 8-bit addresses.
++	 * The addresses in the T lines have 3 bytes.
+ 	 */
+-	exprmasks(3);
++	exprmasks(4);
++	a_bytes = 3;
+ 
+ 	/*
+ 	 * First time only:
+diff --git a/support/regression/tests/bug-4070.c b/support/regression/tests/bug-4070.c
+new file mode 100644
+index 000000000..dc23c256c
+--- /dev/null
++++ b/support/regression/tests/bug-4070.c
+@@ -0,0 +1,79 @@
++/* bug-4070.c
++   The most significant byte of an __sfr32 was read from and written to
++   address 0xff. The assembler evaluated expressions with 24 bits, so that
++   ((_sfr >> 24) & 0xFF) gave the sign extension of bit 23 of the address
++   list.
++ */
++
++#include <testfwk.h>
++
++#if defined (__SDCC_mcs51)
++__sfr __at 0xCC SFR_B0;         /* timer 2 low byte */
++__sfr __at 0xCD SFR_B1;         /* timer 2 high byte */
++__sfr __at 0x8A SFR_B2;         /* timer 0 low byte */
++__sfr __at 0x8C SFR_B3;         /* timer 0 high byte */
++__sfr16 __at 0xCDCC SFR_W0;     /* timer 2 */
++__sfr16 __at 0x8C8A SFR_W1;     /* timer 0 */
++__sfr32 __at 0x8C8ACDCC SFR_32; /* timer 0 and timer 2 */
++
++/* The addresses in the reverse order. Bit 23 of this address list is set
++   as well, because every address of an sfr is 0x80 or higher. */
++__sfr32 __at 0xCCCD8A8C SFR_32R;
++
++unsigned long g;
++#endif
++
++void
++testWrite (void)
++{
++#if defined (__SDCC_mcs51)
++  SFR_32 = 0x12345678;
++  ASSERT (SFR_B0 == 0x78);
++  ASSERT (SFR_B1 == 0x56);
++  ASSERT (SFR_B2 == 0x34);
++  ASSERT (SFR_B3 == 0x12);
++  ASSERT (SFR_W0 == 0x5678);
++  ASSERT (SFR_W1 == 0x1234);
++
++  SFR_32R = 0xa1b2c3d4;
++  ASSERT (SFR_B3 == 0xd4);
++  ASSERT (SFR_B2 == 0xc3);
++  ASSERT (SFR_B1 == 0xb2);
++  ASSERT (SFR_B0 == 0xa1);
++#endif
++}
++
++void
++testRead (void)
++{
++#if defined (__SDCC_mcs51)
++  SFR_32 = 0;
++  SFR_B0 = 0x11;
++  SFR_B1 = 0x22;
++  SFR_B2 = 0x33;
++  SFR_B3 = 0x44;
++  g = SFR_32;
++  ASSERT (g == 0x44332211);
++  g = SFR_32R;
++  ASSERT (g == 0x11223344);
++
++  SFR_W0 = 0xa5a6;
++  SFR_W1 = 0xa3a4;
++  ASSERT (SFR_32 == 0xa3a4a5a6);
++#endif
++}
++
++void
++testModify (void)
++{
++#if defined (__SDCC_mcs51)
++  SFR_32 = 0x00ffffff;
++  SFR_32++;
++  ASSERT (SFR_B3 == 0x01);
++  ASSERT (SFR_W0 == 0x0000);
++
++  SFR_B3 = 0x80;
++  SFR_32 |= 0x01000000;
++  ASSERT (SFR_B3 == 0x81);
++#endif
++}

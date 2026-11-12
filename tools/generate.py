@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the patches, the category pages, and the generated blocks of this repository.
 
-    python3 tools/generate.py --fork PATH [--base REF] [--head REF] [--check]
+    python3 tools/generate.py --fork PATH [--base REF] [--head REF] [--triage DIR] [--check]
 
 PATH is a clone of the fork. The commits in BASE..HEAD (default upstream/trunk..main) are the patch
 series. Commit subjects start with "[TRACKER #NUM]", which assigns each commit to the entry
@@ -9,6 +9,11 @@ tickets/TRACKER/NUM.md. An entry with a patch_of field takes the commits of the 
 field names. Commits whose subjects start with "[fork]" are about the fork itself, such as its
 readme, and are not part of the patch series. With --check nothing is written and the exit status is 1 when a file is out
 of date or when entries and commits do not match.
+
+DIR has the working notes that the entries are written from, one file TRACKER/NUM.md per ticket,
+with the fields upstream_status and verdict in its front matter. With --triage, the open tickets
+in scope that do not have an entry are counted, and the count is stored in config.json as
+"uninvestigated". The readme states the stored count.
 """
 import argparse
 import json
@@ -133,6 +138,23 @@ def load_entries():
             entries[key] = {"fields": fields, "front": front, "body": body, "path": path,
                             "commits": []}
     return entries
+
+
+def count_uninvestigated(triage, entries):
+    n = 0
+    for tracker in sorted(os.listdir(triage)):
+        if tracker not in TRACKER_NAMES:
+            continue
+        for name in os.listdir(os.path.join(triage, tracker)):
+            if not name.endswith(".md") or "%s/%s" % (tracker, name[:-3]) in entries:
+                continue
+            text = open(os.path.join(triage, tracker, name), encoding="utf-8").read()
+            status = re.search(r"^upstream_status:\s*(\S+)", text, re.M)
+            verdict = re.search(r"^verdict:\s*(\S+)", text, re.M)
+            if (status and status.group(1).startswith("open")
+                    and verdict and verdict.group(1) != "out-of-scope"):
+                n += 1
+    return n
 
 
 def sort_key(key):
@@ -294,14 +316,17 @@ def readme_block(config, entries, commits, fork_only, rev, head_sha):
     else:
         lines.append("The fork is trunk %s plus %d commits." % (rev, len(commits)))
     if config.get("fork_url"):
-        lines.append("Its head is [`%s`](%s/commit/%s)." % (head_sha[:9], config["fork_url"],
-                                                          head_sha))
+        lines.append("Its head is [`%s`](%s/commits/%s)." % (head_sha[:9], config["fork_url"],
+                                                           head_sha))
     else:
         lines.append("Its head is `%s`." % head_sha[:9])
     lines += ["", "| Category | Entries |", "|---|---|"]
     for cat, (title, _) in CATEGORIES.items():
         n = sum(1 for e in entries.values() if e["fields"]["category"] == cat)
         lines.append("| [%s](%s.md) | %d |" % (title, cat, n))
+    if config.get("uninvestigated"):
+        lines += ["", "%d more open tickets are still to be investigated, and those about the mcs51 "
+                      "port are investigated first." % config["uninvestigated"]]
     lines += ["", END]
     return "\n".join(lines)
 
@@ -328,6 +353,7 @@ def main():
     ap.add_argument("--fork", required=True, help="path of a clone of the fork")
     ap.add_argument("--base", default="upstream/trunk")
     ap.add_argument("--head", default="main")
+    ap.add_argument("--triage", help="directory of the working notes, to count open tickets")
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
@@ -379,6 +405,9 @@ def main():
     for name in sorted(os.listdir(pdir)):
         if name not in known:
             problems.append("patches/%s is not in the series; remove it" % name)
+    if args.triage:
+        config["uninvestigated"] = count_uninvestigated(args.triage, entries)
+        out.write(os.path.join(ROOT, "config.json"), json.dumps(config, indent=2) + "\n")
     for k, e in entries.items():
         block = entry_block(config, k, e, rev, "../../")
         out.write(e["path"], e["front"] + block + "\n" + e["body"])
