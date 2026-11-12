@@ -1,0 +1,612 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 07:38:20 -0800
+Subject: [PATCH] [bugs #3979] Initialize every designated member of an
+ anonymous struct in a union
+
+The members of an anonymous struct are promoted into the union that has
+it. When designators named several of them, one initializer was used.
+printIvalStruct() emitted one member of the alternative, with warning
+147 when the object itself is the union. createIvalStruct() stopped
+after the first designator of a union. `union u v = {.lo = 0x34,
+.hi = 0x12}` left hi at 0 for `union u { unsigned int raw; struct {
+unsigned char lo, hi; }; }`.
+
+promoteAnonStructs() now marks the first member of each alternative of
+a union other than its first one. differentAlternatives() tells from
+the marks whether two members are in different alternatives of a union.
+
+printIvalStruct() emits each member that has an initializer in the
+alternative that a designator picked. It leaves a member out, as
+before, when the list also has an initializer for a member of another
+alternative.
+
+createIvalStruct() applies all the leading designators of a union when
+they name members of one alternative. For the first alternative, the
+members that follow take the initializers without a designator, and
+automatic storage has the remaining members zeroed. An initializer in
+excess gets warning 147 there. When two designators name members of
+different alternatives, the first designator alone is applied, as
+before.
+
+Both functions keep to one initializer of the alternative, as before,
+for a list in which an initializer can replace a designated one without
+the list showing it. nextInitSlot() does not give an initializer
+without a designator to a member of a later alternative. In
+`{.d = 5, .b = 1, 0, 0}` for `union { int a; struct { char b; union {
+char c; char d; }; char e; }; }`, the first 0 is for c and replaces the
+initializer of d, and the reordered list has the initializers of b and
+d alone. unbraceAnonInit() marks the designated initializer that such
+an initializer follows, and reorderIlistFull() marks its list, with the
+new member inexact of initList. For a union, createIvalStruct() gives
+the initializers without a designator to the members that do not have
+one. C gives them to the members behind the last designated one, which
+can have an initializer or can be in a union with a designated member
+of another alternative. So the first designator alone is applied when
+such initializers follow and a designated member is behind the last
+designated one.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                       |  72 ++++++++++++--
+ src/SDCCglue.c                      |  96 ++++++++++++++----
+ src/SDCCsymt.c                      |  40 ++++++++
+ src/SDCCsymt.h                      |   4 +
+ src/SDCCval.c                       |  20 ++++
+ src/SDCCval.h                       |   2 +
+ support/regression/tests/bug-3979.c | 149 ++++++++++++++++++++++++++++
+ 7 files changed, 355 insertions(+), 28 deletions(-)
+ create mode 100644 support/regression/tests/bug-3979.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 6e9e9e6b8..cff6fa4c6 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1279,6 +1279,56 @@ findStructField (symbol *fields, symbol *target)
+   return NULL; /* not found */
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* sameAlternative - ILOOP is the initializer list of a union with */
++/*   the members FIELDS. Can createIvalStruct() apply each of the  */
++/*   designated initializers that the list starts with, and give   */
++/*   the initializers without a designator to the members behind   */
++/*   the last designated one?  Not when two designated members are */
++/*   in different alternatives of a union, when a designator       */
++/*   follows an initializer without one, or when the list is       */
++/*   inexact (see unbraceAnonInit()). Not either when initializers */
++/*   without a designator follow and a designated member is behind */
++/*   the last designated one. One of them can then be for a member */
++/*   that has an initializer, or for a member of another           */
++/*   alternative than a designated one.                            */
++/*-----------------------------------------------------------------*/
++static bool
++sameAlternative (symbol *fields, initList *iloop)
++{
++  initList *jloop, *rest;
++
++  /* rest is the first initializer without a designator */
++  for (rest = iloop; rest && rest->designation && !rest->inexact; rest = rest->next)
++    ;
++  for (jloop = rest; jloop; jloop = jloop->next)
++    if (jloop->designation || jloop->inexact)
++      return false;
++
++  for (; iloop != rest; iloop = iloop->next)
++    for (jloop = iloop->next; jloop != rest; jloop = jloop->next)
++      {
++        symbol *a = NULL, *b = NULL;
++
++        if (iloop->designation->type == DESIGNATOR_STRUCT && jloop->designation->type == DESIGNATOR_STRUCT)
++          {
++            a = findStructField (fields, iloop->designation->designator.tag);
++            b = findStructField (fields, jloop->designation->designator.tag);
++          }
++        if (!a || !b || differentAlternatives (a, b) || differentAlternatives (b, a))
++          return false;
++        /* b is the last designated member */
++        if (rest && jloop->next == rest)
++          {
++            for (; a && a != b; a = a->next)
++              ;
++            if (!a)
++              return false;
++          }
++      }
++  return true;
++}
++
+ /*-----------------------------------------------------------------*/
+ /* createIvalPart - generates the initial value for the part DESIG */
+ /*   names of SYM, which has its initial value otherwise. Nothing  */
+@@ -1362,6 +1412,8 @@ designatedIlist (sym_link *type, initList *ilist, initList **parts)
+       if (iloop->type != INIT_HOLE)
+         {
+           iloop->designation = newDesignation (DESIGNATOR_STRUCT, sflds);
++          /* for sameAlternative(), which gets these and not the list */
++          iloop->inexact = ilist->inexact;
+           *end = iloop;
+           end = &iloop->next;
+         }
+@@ -1397,9 +1449,12 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+      follows the designated member (C11 6.7.9p17), not the first member of
+      the struct, so remember where the positional walk below resumes. */
+   symbol *resume = NULL;
+-  /* a union takes a single initializer, so a designator is the whole list
+-     for it and only the zero fill below is left to do */
+-  bool uniondesig = false;
++  /* A union takes the initializers for one alternative, which the first
++     designator picks. The designators that follow it are for other members
++     of an anonymous struct. When sameAlternative() finds that they cannot
++     all be applied, only the first designator counts. */
++  symbol *uniondesig = NULL;
++  bool unionsingle = SPEC_STRUCT (type)->type == UNION && !sameAlternative (SPEC_STRUCT (type)->fields, iloop);
+ 
+   for (;iloop && iloop->designation; iloop = iloop->next)
+     {
+@@ -1437,8 +1492,10 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+ 
+       if (SPEC_STRUCT (type)->type == UNION)
+         {
+-          uniondesig = true;
+-          break;
++          if (!uniondesig)
++            uniondesig = sflds;
++          if (unionsingle)
++            break;
+         }
+     }
+ 
+@@ -1517,7 +1574,10 @@ createIvalStruct (ast *sym, sym_link *type, initList *ilist, ast *rootValue)
+         }
+     }
+ 
+-  if (uniondesig)
++  /* The other members of a union's first alternative take the initializers
++     without a designator below, or are zeroed. For another alternative,
++     the zero fill above completes the initialization. */
++  if (uniondesig && (unionsingle || uniondesig->anonunionalias))
+     goto release;
+ 
+   // Handle the rest and fill in the gaps.
+diff --git a/src/SDCCglue.c b/src/SDCCglue.c
+index 105170ea8..b2d663575 100644
+--- a/src/SDCCglue.c
++++ b/src/SDCCglue.c
+@@ -1242,6 +1242,37 @@ designatedAlternative (symbol *sflds, bool isunion, initList *iloop, initList **
+   return desig;
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* noOtherAlternative - is every member of FIELDS that has an      */
++/*   initializer in ILIST in the same alternative as FIELD, of     */
++/*   each union that has both?  ILIST is the reordered list, which */
++/*   has one initializer for each of FIELDS. The answer is no for  */
++/*   a list that reorderIlistIval() marked as inexact, which can   */
++/*   lack an initializer for a member of another alternative.      */
++/*-----------------------------------------------------------------*/
++static bool
++noOtherAlternative (symbol *fields, initList *ilist, symbol *field)
++{
++  initList *iloop = ilist->init.deep;
++  bool behind = false;
++
++  if (ilist->inexact)
++    return false;
++
++  for ( ; fields && iloop; fields = fields->next)
++    {
++      if (fields == field)
++        behind = true;
++      if (!fieldHasIval (fields))
++        continue;
++      if (iloop->type != INIT_HOLE && fields != field &&
++          (behind ? differentAlternatives (field, fields) : differentAlternatives (fields, field)))
++        return false;
++      iloop = iloop->next;
++    }
++  return true;
++}
++
+ /*-----------------------------------------------------------------*/
+ /* firstIsAnonStruct - a union is initialized through its first    */
+ /*   member. When that is an anonymous struct, there are several   */
+@@ -1293,33 +1324,43 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
+      its other members are skipped there as aliases */
+   if (SPEC_STRUCT (type)->type == UNION && !firstIsAnonStruct (sflds))
+     {
+-      int size;
++      unsigned int written = 0;
+       /* skip past holes, print value */
+       while (iloop && iloop->type == INIT_HOLE)
+         {
+           iloop = iloop->next;
+           sflds = sflds->next;
+         }
+-      /* a member promoted out of an anonymous struct sits at an offset of
+-         its own, so the bytes before it get no initializer */
+-      for (size = sflds->offset; size > 0; size--)
++      for (;;)
+         {
+-          printIvalPad (oBuf);
++          /* a member promoted out of an anonymous struct has an offset of
++             its own, so the bytes before it get no initializer */
++          for ( ; written < (unsigned int) sflds->offset; written++)
++            {
++              printIvalPad (oBuf);
++            }
++          printIval (sym, sflds->type, iloop, oBuf, 1);
++          written += getSize (sflds->type);
++          /* advance past holes to find out if there were excess initializers */
++          do
++            {
++              iloop = iloop ? iloop->next : NULL;
++              do
++                sflds = sflds->next;
++              while (sflds && !fieldHasIval (sflds));
++            }
++          while (iloop && iloop->type == INIT_HOLE);
++          /* An initializer for another member of the anonymous struct that
++             the designators picked is not in excess. */
++          if (!iloop || !sflds || IS_BITFIELD (sflds->type) || (unsigned int) sflds->offset < written ||
++              !noOtherAlternative (SPEC_STRUCT (type)->fields, ilist, sflds))
++            break;
+         }
+-      printIval (sym, sflds->type, iloop, oBuf, 1);
+       /* pad out with zeros if necessary */
+-      size = getSize(type) - sflds->offset - getSize(sflds->type);
+-      for ( ; size > 0 ; size-- )
++      for ( ; written < getSize (type); written++)
+         {
+           printIvalPad (oBuf);
+         }
+-      /* advance past holes to find out if there were excess initializers */
+-      do
+-        {
+-          iloop = iloop ? iloop->next : NULL;
+-          sflds = sflds->next;
+-        }
+-      while (iloop && iloop->type == INIT_HOLE);
+     }
+   else
+     {
+@@ -1346,14 +1387,25 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
+               // A designator picked an alternative of this anonymous union
+               // other than the first one, so emit the union through that
+               // member: the bytes before it get no initializer, and the ones
+-              // after it are left to the padding below.
+-              for ( ; written < (unsigned int) desig->offset; written++)
+-                printIvalPad (oBuf);
+-              printIval (sym, desig->type, desigilist, oBuf, 1);
+-              written += getSize (desig->type);
++              // after it are left to the padding below. When the alternative
++              // is an anonymous struct, its other members can have an
++              // initializer as well. Each of them is emitted, unless the list
++              // also has an initializer for a member of another alternative.
+               for ( ; sflds != after; sflds = sflds->next)
+-                if (fieldHasIval (sflds))
+-                  iloop = iloop ? iloop->next : NULL;
++                {
++                  if (sflds == desig ||
++                      (iloop && iloop->type != INIT_HOLE && !IS_BITFIELD (sflds->type) &&
++                       (unsigned int) sflds->offset >= written &&
++                       noOtherAlternative (SPEC_STRUCT (type)->fields, ilist, sflds)))
++                    {
++                      for ( ; written < (unsigned int) sflds->offset; written++)
++                        printIvalPad (oBuf);
++                      printIval (sym, sflds->type, iloop, oBuf, 1);
++                      written += getSize (sflds->type);
++                    }
++                  if (fieldHasIval (sflds))
++                    iloop = iloop ? iloop->next : NULL;
++                }
+             }
+           else if (IS_BITFIELD (sflds->type))
+             {
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index 5dcaaa0e3..031677c86 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -2110,6 +2110,7 @@ promoteAnonStructs (structdef * sdef)
+               continue;
+             }
+           field->anonunionalias = 1;
++          field->anonaltstart = !isfirst;
+         }
+     }
+ 
+@@ -2174,6 +2175,7 @@ promoteAnonStructs (structdef * sdef)
+             {
+               firstival->anonopen++;
+               lastival->anonclose++;
++              firstival->anonaltstart |= field->anonaltstart;
+             }
+           subfield->next = nextfield;
+           tofield = &subfield->next;
+@@ -2187,6 +2189,44 @@ promoteAnonStructs (structdef * sdef)
+     }
+ }
+ 
++/*-------------------------------------------------------------------*/
++/* differentAlternatives - is the member B, which is behind the      */
++/*   member A in the list that promoteAnonStructs() made, in another */
++/*   alternative of a union than A?  Then an initializer can go to   */
++/*   only one of them.                                               */
++/*-------------------------------------------------------------------*/
++bool
++differentAlternatives (const symbol *a, const symbol *b)
++{
++  const symbol *f;
++  int depth = 0;                /* anonymous structs and unions entered behind A minus the ones exited */
++  int mindepth = 0;             /* its lowest value so far: the ones open at this depth have A in them */
++  int altdepth = 0;             /* its value where the alternative starts */
++  bool inalt = false;           /* in an alternative, other than the first, of a union with A in it */
++
++  for (f = a; f; f = f->next)
++    {
++      if (f != a)
++        {
++          if (!inalt && f->anonaltstart && depth == mindepth)
++            {
++              inalt = true;
++              altdepth = depth;
++            }
++          depth += f->anonopen;
++          if (f == b)
++            return inalt;
++        }
++      depth -= f->anonclose;
++      if (depth < mindepth)
++        mindepth = depth;
++      if (depth <= altdepth)
++        inalt = false;
++    }
++
++  return false;
++}
++
+ /*------------------------------------------------------------------*/
+ /* checkQualifers - check qualifiers on type, use sym for           */
+ /*                  diagnostics, if provided.                       */
+diff --git a/src/SDCCsymt.h b/src/SDCCsymt.h
+index 7cf3874af..3f35ec74c 100644
+--- a/src/SDCCsymt.h
++++ b/src/SDCCsymt.h
+@@ -348,6 +348,9 @@ typedef struct symbol
+   unsigned anonopen:8;              /* number of anonymous structs/unions this is the first */
+   unsigned anonclose:8;             /* and the last member of that takes an initializer (set
+                                        in promoteAnonStructs, read by unbraceAnonIlist) */
++  unsigned anonaltstart:1;          /* the first member that takes an initializer of an
++                                       alternative of a union other than its first one (set in
++                                       promoteAnonStructs, read by differentAlternatives) */
+ 
+   /* following flags are used by the backend
+      for code generation and can be changed
+@@ -795,6 +798,7 @@ sym_link *typeFromStr (const char *);
+ STORAGE_CLASS sclsFromPtr (sym_link * ptr);
+ sym_link *newEnumType (symbol *enumlist, sym_link *userRequestedType);
+ void promoteAnonStructs (structdef *);
++bool differentAlternatives (const symbol *, const symbol *);
+ sym_link *argumentTypeAfterDecay (sym_link *, value **);
+ void checkPtrTargetQualifiers (sym_link *, sym_link *);
+ void checkPtrTargetQualifiersAfterDecay (sym_link *, sym_link *);
+diff --git a/src/SDCCval.c b/src/SDCCval.c
+index 857b5f347..1bdb12890 100644
+--- a/src/SDCCval.c
++++ b/src/SDCCval.c
+@@ -705,6 +705,22 @@ unbraceAnonInit (sym_link * type, initList * iloop, int idx, int last, int level
+       dst->next = NULL;
+       *tail = dst;
+       tail = &dst->next;
++      /* An initializer without a designator is for the next member that is
++         not in another alternative of a union than this one (C11 6.7.9p17).
++         nextInitSlot() skips that member after a designator for a member of
++         a later alternative that has more members. The initializer is then
++         lost or assigned to a member after the union. The mark tells
++         printIvalStruct() and createIvalStruct() that the list can lack an
++         initializer for a member of the alternative. */
++      if (skipaliases && iloop->next && !iloop->next->designation)
++        {
++          symbol *from = findStructFieldAt (type, idx), *to;
++
++          for (to = from ? from->next : NULL; to; to = to->next)
++            if (!(IS_BITFIELD (to->type) && SPEC_BUNNAMED (to->etype)) && !differentAlternatives (from, to))
++              break;
++          dst->inexact = to && to->anonunionalias;
++        }
+       idx = skipaliases ? nextInitSlot (type, idx) : idx + 1;
+     }
+ 
+@@ -755,6 +771,7 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+   initList *iloop, *nlist, **nlistArray, **partArray = NULL;
+   symbol *sflds;
+   int size=0, idx;
++  bool inexact = false;
+ 
+   if (!IS_AGGREGATE (type))
+     /* uninteresting: no designated initializers */
+@@ -814,6 +831,8 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+   for (idx = 0 ; iloop ; iloop = iloop->next,
+                          idx = skipaliases ? nextInitSlot (type, idx) : idx + 1)
+     {
++      inexact |= iloop->inexact;
++
+       if (iloop->designation)
+         {
+           assert (iloop->type != INIT_HOLE);
+@@ -929,6 +948,7 @@ static initList *reorderIlistFull (sym_link * type, initList * ilist, bool skipa
+   nlist->filename = ilist->filename;
+   nlist->lineno = ilist->lineno;
+   nlist->designation = ilist->designation;
++  nlist->inexact = inexact;
+   nlist->next = ilist->next;
+   return nlist;
+ }
+diff --git a/src/SDCCval.h b/src/SDCCval.h
+index cdb48370f..063ff1870 100644
+--- a/src/SDCCval.h
++++ b/src/SDCCval.h
+@@ -64,6 +64,8 @@ typedef struct initList
+   int lineno;
+   const char *filename;
+   bool isempty;                         // C23 empty initializer
++  bool inexact;                         // the initializer after this one, or after one in this list, is not
++                                        // assigned to the member that C assigns it to (see unbraceAnonInit())
+   struct designation *designation;
+   union
+   {
+diff --git a/support/regression/tests/bug-3979.c b/support/regression/tests/bug-3979.c
+new file mode 100644
+index 000000000..761b19389
+--- /dev/null
++++ b/support/regression/tests/bug-3979.c
+@@ -0,0 +1,149 @@
++/* bug-3979.c
++   Designated initializers for several members of an anonymous struct
++   that is an alternative of a union.
++
++   The members of the anonymous struct are promoted into the union. Of
++   the designated initializers, only one was used. The others were
++   dropped, with warning 147 for a constant object and without a
++   diagnostic for an object that code initializes.
++
++   The constant objects are emitted as data, the automatic ones are
++   initialized by code, and the others by code or as data, depending on
++   the memory model.
++ */
++
++#include <testfwk.h>
++
++/* the anonymous struct is the second alternative */
++union u
++{
++  unsigned int raw;
++  struct
++  {
++    unsigned char lo, hi;
++  };
++};
++
++/* the anonymous struct is the first alternative */
++union q
++{
++  struct
++  {
++    unsigned char a, b, c, d;
++  };
++  unsigned long l;
++};
++
++/* an anonymous union in a struct, with a member after it */
++struct s
++{
++  unsigned char n;
++  union
++  {
++    unsigned char a;
++    struct
++    {
++      unsigned char b, c;
++    };
++    struct
++    {
++      unsigned char d, e, f;
++    };
++  };
++  unsigned char z;
++};
++
++/* an anonymous union in the anonymous struct */
++union n
++{
++  int a;
++  struct
++  {
++    char b;
++    union
++    {
++      char c;
++      char d;
++    };
++    char e;
++  };
++};
++
++const union u cu1 = {.lo = 0x34, .hi = 0x12};
++const union u cu2 = {.hi = 0x12, .lo = 0x34};
++const union u cu3 = {.hi = 0x12};
++const union q cq1 = {.a = 1, .b = 2, .c = 3, .d = 4};
++const union q cq2 = {.b = 2, .d = 4};
++const struct s cs1 = {.n = 100, .a = 123, .z = 9};
++const struct s cs2 = {.n = 100, .c = 123};
++const struct s cs3 = {.n = 100, .e = 123};
++const struct s cs4 = {100, .d = 1, .e = 2, .f = 3, 9};
++const struct s cs5 = {100, .b = 1, .c = 2, .z = 9};
++/* The first 0 is for c, the member after b, and replaces the initializer
++   of d. */
++const union n cn1 = {.d = 5, .b = 1, 0, 0};
++
++union u gu1 = {.lo = 0x34, .hi = 0x12};
++union q gq1 = {.a = 1, .b = 2, .c = 3, .d = 4};
++struct s gs4 = {100, .d = 1, .e = 2, .f = 3, 9};
++/* The 4 is for b, the member after a, which has an initializer. */
++union q gq2 = {.b = 4, .a = 0, 4};
++
++void
++testConst (void)
++{
++  ASSERT (cu1.lo == 0x34 && cu1.hi == 0x12);
++  ASSERT (cu2.lo == 0x34 && cu2.hi == 0x12);
++  ASSERT (cu3.lo == 0 && cu3.hi == 0x12);
++
++  ASSERT (cq1.a == 1 && cq1.b == 2 && cq1.c == 3 && cq1.d == 4);
++  ASSERT (cq2.a == 0 && cq2.b == 2 && cq2.c == 0 && cq2.d == 4);
++
++  ASSERT (cs1.n == 100 && cs1.a == 123 && cs1.z == 9);
++  ASSERT (cs2.n == 100 && cs2.b == 0 && cs2.c == 123 && cs2.z == 0);
++  ASSERT (cs3.n == 100 && cs3.d == 0 && cs3.e == 123 && cs3.f == 0 && cs3.z == 0);
++  ASSERT (cs4.n == 100 && cs4.d == 1 && cs4.e == 2 && cs4.f == 3 && cs4.z == 9);
++  ASSERT (cs5.n == 100 && cs5.b == 1 && cs5.c == 2 && cs5.f == 0 && cs5.z == 9);
++
++  ASSERT (cn1.b == 1 && cn1.d == 0 && cn1.e == 0);
++}
++
++void
++testGlobal (void)
++{
++  ASSERT (gu1.lo == 0x34 && gu1.hi == 0x12);
++  ASSERT (gq1.a == 1 && gq1.b == 2 && gq1.c == 3 && gq1.d == 4);
++  ASSERT (gs4.n == 100 && gs4.d == 1 && gs4.e == 2 && gs4.f == 3 && gs4.z == 9);
++  ASSERT (gq2.a == 0 && gq2.b == 4 && gq2.c == 0 && gq2.d == 0);
++}
++
++void
++testAuto (void)
++{
++  unsigned char i;
++
++  /* a member without an initializer is zero, also the second time round */
++  for (i = 0; i < 2; i++)
++    {
++      union u au1 = {.lo = 0x34, .hi = 0x12};
++      union u au2 = {.hi = 0x12, .lo = 0x34};
++      union u au3 = {.hi = 0x12};
++      union q aq1 = {.a = 1, .b = 2, .c = 3, .d = 4};
++      union q aq2 = {.b = 2, .d = 4};
++      union q aq3 = {.c = 3, 4};
++      struct s as4 = {100, .d = 1, .e = 2, .f = 3, 9};
++
++      ASSERT (au1.lo == 0x34 && au1.hi == 0x12);
++      ASSERT (au2.lo == 0x34 && au2.hi == 0x12);
++      ASSERT (au3.lo == 0 && au3.hi == 0x12);
++
++      ASSERT (aq1.a == 1 && aq1.b == 2 && aq1.c == 3 && aq1.d == 4);
++      ASSERT (aq2.a == 0 && aq2.b == 2 && aq2.c == 0 && aq2.d == 4);
++      ASSERT (aq3.a == 0 && aq3.b == 0 && aq3.c == 3 && aq3.d == 4);
++
++      ASSERT (as4.n == 100 && as4.d == 1 && as4.e == 2 && as4.f == 3 && as4.z == 9);
++
++      au1.raw = au2.raw = au3.raw = 0x5a5a;
++      aq1.l = aq2.l = aq3.l = 0x5a5a5a5a;
++    }
++}

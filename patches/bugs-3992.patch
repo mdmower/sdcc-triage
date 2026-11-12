@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 08:26:04 -0800
+Subject: [PATCH] [bugs #3992] Limit the scope exemption of bug #3289 to
+ enumeration constants
+
+leaveBlockScope() marks the symbols of a block as out of scope when
+the parser reaches the end of the block. Since the fix for bug #3289
+it skipped every symbol whose type has the enum flag. That flag is set
+for enumeration constants and for enumerated types, so objects and
+typedef names of an enumerated type stayed in scope until the end of
+the function. addSymChain() found such a symbol when a later block
+declared the same name at a level that differs only in the sublevel,
+which is the case after a declaration that follows a statement. For
+
+    for (Foo_t i = a; i < d; i++) { }
+    int x = 0;
+    for (Foo_t i = a; i < d; i++) x++;
+
+the second loop got error 0 (Duplicate symbol 'i') and error 20
+(Undefined identifier 'i').
+
+leaveBlockScope() now skips only enumeration constants, which are the
+symbols that have the enum flag and the storage class of a literal.
+BLOCK nodes do not list them, so resolveSymbols() cannot mark them as
+in scope again. Two enumeration constants of the same name in such
+blocks still get error 0, which is bug #3495.
+
+Adds tests/bug-3992.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCsymt.c                      |  7 +++-
+ support/regression/tests/bug-3992.c | 61 +++++++++++++++++++++++++++++
+ 2 files changed, 67 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-3992.c
+
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index 031677c86..d4337dfae 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -2728,7 +2728,12 @@ leaveBlockScope (int block)
+               /* Temporary fix for bug #3289 - leave enums in scope. */
+               /* This is also buggy but compatible with 4.1.0 and    */
+               /* earlier behavior and less likely to trigger errors. */
+-              if (sym->etype && SPEC_ENUM(sym->etype))
++              /* It applies to enumeration constants only. BLOCK     */
++              /* nodes do not list them, so resolveSymbols() cannot  */
++              /* mark them as in scope again. Objects and typedef    */
++              /* names of an enumerated type are marked out of scope */
++              /* like the symbols of other types.                    */
++              if (sym->etype && SPEC_ENUM(sym->etype) && IS_LITERAL(sym->etype))
+                 continue;
+               /* Everything else, mark as out of scope. */
+               sym->isinscope = 0;
+diff --git a/support/regression/tests/bug-3992.c b/support/regression/tests/bug-3992.c
+new file mode 100644
+index 000000000..a66fc32f6
+--- /dev/null
++++ b/support/regression/tests/bug-3992.c
+@@ -0,0 +1,61 @@
++/* bug-3992.c
++   Objects of an enumerated type stayed in scope after the end of their
++   block. A declaration of the same name in a later block, after a
++   declaration that follows a statement, was rejected as a duplicate symbol.
++ */
++
++#include <testfwk.h>
++
++typedef enum {a, b, c, d} Foo_t;
++enum tag {p, q, r};
++
++static unsigned char n;
++
++/* The code of the bug report. */
++static int
++twoLoops (void)
++{
++  for (Foo_t i = a; i < d; i++)
++    n++;
++
++  int x = 0;
++  for (Foo_t i = b; i < d; i++)
++    x++;
++
++  return x;
++}
++
++static int
++twoBlocks (void)
++{
++  int i = 40;
++
++  {
++    enum tag i = r;
++    n += i;
++  }
++
++  int x = i;
++  {
++    enum tag i = q;
++    x += i;
++  }
++  {
++    long i = 100;
++    x += i;
++  }
++
++  return x + i;
++}
++
++void
++testBug (void)
++{
++  n = 0;
++
++  ASSERT (twoLoops () == 2);
++  ASSERT (n == 3);
++
++  ASSERT (twoBlocks () == 181);
++  ASSERT (n == 5);
++}
