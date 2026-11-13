@@ -13,7 +13,7 @@ Its head is [`695ce6c16`](https://github.com/mdmower/sdcc/commits/695ce6c16dc493
 |---|---|
 | [Already fixed in trunk](fixed-upstream.md) | 14 |
 | [Not reproducible](not-reproducible.md) | 2 |
-| [Duplicates](duplicate.md) | 3 |
+| [Duplicates](duplicate.md) | 4 |
 | [No action recommended](no-action.md) | 4 |
 | [Information needed from the reporter](needs-info.md) | 1 |
 | [Trivial fixes](fix-trivial.md) | 16 |
@@ -22,7 +22,7 @@ Its head is [`695ce6c16`](https://github.com/mdmower/sdcc/commits/695ce6c16dc493
 | [Analyzed, not fixed](unresolved.md) | 4 |
 | [Problems without a ticket and without a patch](unreported.md) | 0 |
 
-517 more open tickets are still to be investigated, and those about the mcs51 port are investigated first.
+516 more open tickets are still to be investigated, and those about the mcs51 port are investigated first.
 
 <!-- end of generated block -->
 
