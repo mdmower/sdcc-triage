@@ -1,0 +1,359 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 18:59:30 -0800
+Subject: [PATCH] [bugs #4054] Do not read through the pointer for a struct
+ value
+
+For *p with a pointer to a struct or union, geniCodeDerefPtr() generated
+the read through the pointer that a scalar needs. The users of a struct
+value take its operand for the address of the object, so f (*p) copied
+the argument from the address that the first bytes of *p form. The value
+of *p = y and an operand *p of a conditional expression were read in the
+same way. The value is now a copy of the pointer, with the type of the
+object and the output class of the pointer's kind. The value of a
+variable or of a member has that form.
+
+geniCodeSEParms() replaced an argument p[i] with p + i to avoid the read.
+The replacement is removed. With it the pointer got the kind that belongs
+to the storage class of p, and mcs51 rejected f (p[i]) with error 129
+when p is a generic pointer.
+
+For a function that is not reentrant, geniCodeParms() assigned the
+address of a struct argument to the second parameter of memcpy without a
+conversion. The mcs51 code generator then takes the address space of the
+generic pointer from the output class in the type of the address, which
+is wrong for a pointer that is not generic and for the value of a call.
+The address is now cast to the type of the parameter.
+
+The test of bug #4054 is enabled, and bug-4054-2.c has the other forms.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCicode.c                       |  21 ++-
+ support/regression/tests/bug-4054-2.c | 231 ++++++++++++++++++++++++++
+ support/regression/tests/bug-4054.c   |   2 -
+ 3 files changed, 247 insertions(+), 7 deletions(-)
+ create mode 100644 support/regression/tests/bug-4054-2.c
+
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index d5ed91fd5..42e933f02 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -3185,13 +3185,18 @@ geniCodeDerefPtr (operand *op, int lvl)
+       return op;
+     }
+ 
+-  if (IS_TRUE_SYMOP (op) || IS_OP_LITERAL (op))
++  /* The value of a struct or union is passed on as the address of its object, as the value
++     of a variable or of a member is. The pointer is that address and is not read through. */
++  bool structval = IS_STRUCT (optype->next) && !isLvaluereq (lvl);
++
++  if (IS_TRUE_SYMOP (op) || IS_OP_LITERAL (op) || structval)
+     {
+       // For a true symop, we need the iTemp copy, since setOperandType below will fail otherwise.
+       /* To avoid problems converting a dereferenced literal pointer */
+       /* back and forth between lvalue and rvalue formats, replace   */
+       /* the literal pointer with an iTemp and assign the literal    */
+       /* value to the iTemp. */
++      // The value of a struct or union needs the copy, since its iTemp gets the type of the object below.
+       iCode *ic;
+       operand *iop = newiTempOperand (optype, 0);
+       SPEC_SCLS (OP_SYM_ETYPE (iop)) = S_AUTO;   /* remove S_LITERAL */
+@@ -3225,7 +3230,7 @@ geniCodeDerefPtr (operand *op, int lvl)
+   op->isaddr = (IS_PTR (rtype) ||
+                 IS_STRUCT (rtype) || IS_INT (rtype) || IS_BITINT (rtype) || IS_BOOL (rtype) || IS_CHAR (rtype) || IS_FLOAT (rtype) || IS_FIXED (rtype));
+ 
+-  if (!isLvaluereq (lvl))
++  if (!isLvaluereq (lvl) && !structval)
+     op = geniCodeRValue (op, true);
+ 
+   if (IS_DECL (rtype))
+@@ -3240,6 +3245,13 @@ geniCodeDerefPtr (operand *op, int lvl)
+     }
+   setOperandType (op, rtype);
+ 
++  if (structval)
++    {
++      /* The user of the value takes the kind of pointer from the output class. */
++      op->isaddr = 0;
++      setOClass (optype, getSpec (operandType (op)));
++    }
++
+   return op;
+ }
+ 
+@@ -3678,9 +3690,6 @@ geniCodeSEParms (ast *parms, int lvl, sym_link *ftype)
+   if (IS_CAST_OP (parms) && IS_PTR (parms->ftype) && IS_ADDRESS_OF_OP (parms->right))
+     parms->right->left->lvalue = 1;
+ 
+-  if (parms->type == EX_OP && parms->opval.op == '[' && IS_STRUCT (parms->ftype)) // Do not dereference pointer to struct.
+-    parms->opval.op = '+';
+-
+   parms->opval.oprnd = geniCodeRValue (ast2iCode (parms, lvl + 1), false);
+   if (IFFUNC_ISDYNAMICC (ftype)) // Dynamic C passes first param both in register and on stack. Need an iTemp to avoid duplication (and double read of volatile, etc).
+     {
+@@ -3764,6 +3773,8 @@ send:
+  
+               // Keep this one in mind in so we can move it later.
+               operand *dstop = geniCodeCast (FUNC_ARGS(builtin_memcpy->type)->type, operandFromValue (argVals, true), false);
++              // The source can be a pointer of another kind than the parameter of memcpy.
++              pval = geniCodeCast (FUNC_ARGS(builtin_memcpy->type)->next->type, pval, false);
+               castic_end = iCodeChainEnd;
+               if (IS_REGPARM (FUNC_ARGS (builtin_memcpy->type)->etype))
+                 {
+diff --git a/support/regression/tests/bug-4054-2.c b/support/regression/tests/bug-4054-2.c
+new file mode 100644
+index 000000000..9b48c572a
+--- /dev/null
++++ b/support/regression/tests/bug-4054-2.c
+@@ -0,0 +1,231 @@
++/* bug-4054-2.c
++   A struct or union argument that is the target of a pointer, as in f (*p),
++   was read through twice, so that the first bytes of the object were taken
++   for its address. With an index, as in f (p[i]), mcs51 rejected the call
++   (error 129). The value of an assignment to such a target, as in
++   x = *p = y, was read through twice too. For a function that is not
++   reentrant, mcs51 also copied the argument from the wrong address space
++   when the address was a pointer that is not generic or the address of the
++   value of a call.
++ */
++
++#include <testfwk.h>
++
++#include <stdarg.h>
++
++struct s
++{
++  unsigned char a;
++  int b;
++};
++
++struct w
++{
++  unsigned char k;
++  struct s m[2];
++};
++
++union u
++{
++  unsigned char a;
++  long b;
++};
++
++const struct s ca[3] = {{0x20, 0x2020}, {0x21, 0x2121}, {0x22, 0x2222}};
++const struct s cm[2][2] = {{{0x30, 0x3030}, {0x31, 0x3131}}, {{0x32, 0x3232}, {0x33, 0x3333}}};
++const struct w cw = {0x35, {{0x36, 0x3636}, {0x37, 0x3737}}};
++struct s rs;
++struct s rd;
++struct s ra[2];
++unsigned char cnt;
++
++/* the members of v are a and a * 0x101 */
++unsigned char
++is (struct s v, unsigned char a)
++{
++  return v.a == a && v.b == a * 0x101;
++}
++
++unsigned char
++mid (unsigned char x, struct s v, unsigned char y)
++{
++  return v.a == x && v.b == x * 0x101 && y == 0x99;
++}
++
++unsigned char
++two (struct s v, struct s w, unsigned char a)
++{
++  return v.a == a && v.b == a * 0x101 && w.a == a + 1 && w.b == (a + 1) * 0x101;
++}
++
++unsigned char
++isUnion (union u v)
++{
++  return v.b == 0x12345678;
++}
++
++unsigned char
++param (const struct s *p)
++{
++  return is (*p, 0x21) && mid (0x21, *p, 0x99);
++}
++
++unsigned char
++variadic (unsigned char a, ...)
++{
++  va_list ap;
++  unsigned char r;
++
++  va_start (ap, a);
++  r = is (va_arg (ap, struct s), a);
++  va_end (ap);
++  return r;
++}
++
++void
++testBug (void)
++{
++  const struct s *p = &ca[1];
++  const struct s **pp = &p;
++  const struct s (*pm)[2] = cm;
++  const struct w *pw = &cw;
++  struct s *q = &rs;
++  union u x;
++  union u *px = &x;
++  unsigned char i = 1;
++
++  rs.a = 0x41;
++  rs.b = 0x4141;
++  ra[0].a = 0x50;
++  ra[0].b = 0x5050;
++  ra[1].a = 0x51;
++  ra[1].b = 0x5151;
++  cnt = 0;
++
++  ASSERT (is (*p, 0x21));
++  ASSERT (is (*q, 0x41));
++  ASSERT (is (**pp, 0x21));
++  ASSERT (is (*(p + i), 0x22));
++  ASSERT (is (*(p - 1), 0x20));
++  ASSERT (is ((cnt++, *p), 0x21));
++  ASSERT (cnt == 1);
++  ASSERT (is (*p++, 0x21));
++  ASSERT (p == &ca[2]);
++  ASSERT (is (*--p, 0x21));
++  ASSERT (p == &ca[1]);
++  ASSERT (mid (0x41, *q, 0x99));
++  ASSERT (two (*(p - 1), *p, 0x20));
++  ASSERT (two (ca[1], *(p + i), 0x21));
++  ASSERT (param (&ca[1]));
++  ASSERT (variadic (0x41, *q));
++  ASSERT (variadic (0x22, p[i]));
++
++  /* with an index */
++  ASSERT (is (p[i], 0x22));
++  ASSERT (is (p[0], 0x21));
++  ASSERT (is (ca[i], 0x21));
++  ASSERT (is (ra[i], 0x51));
++  ASSERT (is (cm[i][0], 0x32));
++  ASSERT (is (pm[1][i], 0x33));
++  ASSERT (is ((*pm)[i], 0x31));
++  ASSERT (is (cw.m[i], 0x37));
++  ASSERT (is (pw->m[i], 0x37));
++  ASSERT (is (pw->m[0], 0x36));
++  q = ra;
++  ASSERT (is (q[i], 0x51));
++  ASSERT (two (q[0], q[i], 0x50));
++
++  x.b = 0x12345678;
++  ASSERT (isUnion (*px));
++}
++
++/* the value of an assignment to the target of a pointer */
++void
++testAssign (void)
++{
++  struct s *q = ra;
++  unsigned char i = 1;
++
++  rs.a = 0x44;
++  rs.b = 0x4444;
++
++  rd = ra[0] = rs;
++  ASSERT (is (ra[0], 0x44));
++  ASSERT (is (rd, 0x44));
++
++  rd = q[i] = ca[0];
++  ASSERT (is (ra[1], 0x20));
++  ASSERT (is (rd, 0x20));
++
++  rd = *q = ca[2];
++  ASSERT (is (ra[0], 0x22));
++  ASSERT (is (rd, 0x22));
++}
++
++#ifdef __SDCC_mcs51
++__xdata struct s xs;
++__data struct s ds;
++__idata struct s ids;
++struct s __xdata *xp;
++struct s __data *dp;
++struct s __idata *ip;
++const struct s __code *cp;
++#endif
++
++/* pointers that are not generic */
++void
++testSpace (void)
++{
++#ifdef __SDCC_mcs51
++  xs.a = 0x61;
++  xs.b = 0x6161;
++  ds.a = 0x62;
++  ds.b = 0x6262;
++  ids.a = 0x63;
++  ids.b = 0x6363;
++  xp = &xs;
++  dp = &ds;
++  ip = &ids;
++  cp = &ca[1];
++
++  ASSERT (is (*xp, 0x61));
++  ASSERT (is (*dp, 0x62));
++  ASSERT (is (*ip, 0x63));
++  ASSERT (is (*cp, 0x21));
++  ASSERT (is (xp[0], 0x61));
++  ASSERT (is (cp[1], 0x22));
++  ASSERT (is (*(cp - 1), 0x20));
++  ASSERT (is (*(struct s *)xp, 0x61));
++  ASSERT (mid (0x62, *dp, 0x99));
++  ASSERT (two (*dp, *ip, 0x62));
++  ASSERT (two (*(cp - 1), *cp, 0x20));
++#endif
++}
++
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++struct s
++get (unsigned char a)
++{
++  struct s r;
++
++  r.a = a;
++  r.b = a * 0x101;
++  return r;
++}
++#endif
++
++/* the value of a call */
++void
++testCall (void)
++{
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++  rs.a = 0x42;
++  rs.b = 0x4242;
++
++  ASSERT (is (get (0x71), 0x71));
++  ASSERT (mid (0x72, get (0x72), 0x99));
++  ASSERT (two (get (0x73), get (0x74), 0x73));
++  ASSERT (two (get (0x41), rs, 0x41));
++  ASSERT (two (rs, get (0x43), 0x42));
++#endif
++}
+diff --git a/support/regression/tests/bug-4054.c b/support/regression/tests/bug-4054.c
+index ce4eca7f3..d639b4960 100644
+--- a/support/regression/tests/bug-4054.c
++++ b/support/regression/tests/bug-4054.c
+@@ -26,7 +26,6 @@ void check_cast(B actual, B expected) {
+ 
+ void
+ testBug(void) {
+-#if 0 // Bug not yet fixed
+     A a = { .value = 15, .value2 = 5 };
+     B b = {.value = 15, .value2 = 5 };
+     check_cast(*(B*)&a, b); // memcmp_result != 0 (bug)
+@@ -35,6 +34,5 @@ testBug(void) {
+     B var = *(B*)&a;
+     check_cast(var, b); // memcmp_result == 0
+     ASSERT (!memcmp_result);
+-#endif
+ }
+ 

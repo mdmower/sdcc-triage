@@ -1,0 +1,585 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 18:43:04 -0800
+Subject: [PATCH] [bugs #4131] Select between generic pointers for a
+ conditional expression of struct type
+
+The value of a struct or union expression is the address of an object,
+and the output class in the type of the operand gives the kind of that
+address. geniCodeConditional() assigned the addresses of the second and
+the third operand to one temporary that had the type of the conditional
+expression. The output class of that type does not have to match the
+objects. With a call as an operand it was the code space, which is the
+output class of a function's return type, so for mcs51 the value was
+read from code memory at the address of the call's result object. For
+two objects in different address spaces, one kind of address cannot be
+right.
+
+The two operands were also evaluated as values. An operand of the form
+*p or a[i] was read through its address as a scalar, and the bytes that
+were read from the object were used as the address of the value (bugs
+#4163 and #3857).
+
+The operands are now evaluated like the operand of '&'. Their addresses
+are cast to generic pointers, and the temporary has the generic output
+class.
+
+A return statement with such an expression now copies the value to the
+temporary object of geniCodeReturnStruct(), like other struct values
+that are not variables. The z80 and stm8 code generators gave an
+internal error for it (bug #4131), and the mcs51 code generator
+rejected it with error 172.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCicode.c                        |  42 ++++-
+ src/mcs51/gen.c                        |   9 +-
+ support/regression/tests/bug-3857.c    |  86 +++++++++
+ support/regression/tests/bug-4131.c.in | 242 +++++++++++++++++++++++++
+ support/regression/tests/bug-4163.c    |  90 +++++++++
+ 5 files changed, 458 insertions(+), 11 deletions(-)
+ create mode 100644 support/regression/tests/bug-3857.c
+ create mode 100644 support/regression/tests/bug-4131.c.in
+ create mode 100644 support/regression/tests/bug-4163.c
+
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index 42e933f02..4c6490b2a 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -56,6 +56,8 @@ static operand *geniCodeArray (operand *, operand *, int, bool noderef);
+ static operand *geniCodeArray2Ptr (operand *);
+ operand *geniCodeRValue (operand *, bool);
+ operand *geniCodeDerefPtr (operand *, int);
++static void addLvaluereq (int lvl);
++static void delLvaluereq (void);
+ static int isLvaluereq (int lvl);
+ static operand *geniCodeCast (sym_link *, operand *, bool);
+ 
+@@ -3496,6 +3498,28 @@ geniCodeBinary (operand * left, operand * right, int oper, sym_link * resType)
+   return IC_RESULT (ic);
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* geniCodeStructAddress - the address of the object that holds    */
++/*                         the value of a struct or union          */
++/*                         expression, as a generic pointer        */
++/*-----------------------------------------------------------------*/
++static operand *
++geniCodeStructAddress (ast *tree, int lvl)
++{
++  operand *op;
++  sym_link *type;
++
++  /* evaluate the expression as the operand of '&', see ast2iCode() */
++  addLvaluereq (lvl);
++  op = operandFromAst (tree, lvl, true);
++  delLvaluereq ();
++  op = geniCodeAddressOf (op);
++
++  type = copyLinkChain (operandType (op));
++  DCL_TYPE (type) = GPOINTER;
++  return geniCodeCast (type, op, true);
++}
++
+ /*-----------------------------------------------------------------*/
+ /* geniCodeConditional - geniCode for '?' ':' operation            */
+ /*-----------------------------------------------------------------*/
+@@ -3510,11 +3534,19 @@ geniCodeConditional (ast * tree, int lvl)
+   operand *cond = ast2iCode (tree->left, lvl + 1);
+   operand *result = newiTempOperand (tree->ftype, 0);
+   operand *opTrue, *opFalse;
++  bool isStruct = IS_STRUCT (tree->ftype);
++
++  /* The value of an operand of struct or union type is the address of an object, and the kind
++     of that address follows from the output class in the operand's type. The objects of the
++     second and the third operand can be in different address spaces, and neither of them
++     needs to be in the address space of tree->ftype, so the result is a generic pointer. */
++  if (isStruct)
++    SPEC_OCLS (getSpec (operandType (result))) = generic;
+ 
+   ic = newiCodeCondition (geniCodeRValue (cond, false), NULL, falseLabel);
+   ADDTOCHAIN (ic);
+ 
+-  opTrue = ast2iCode (astTrue, lvl + 1);
++  opTrue = isStruct ? geniCodeStructAddress (astTrue, lvl + 1) : ast2iCode (astTrue, lvl + 1);
+ 
+   /* move the value to the new operand */
+   geniCodeAssign (result, geniCodeRValue (opTrue, false), 0, 0);
+@@ -3525,7 +3557,7 @@ geniCodeConditional (ast * tree, int lvl)
+   /* now for the right side */
+   geniCodeLabel (falseLabel);
+ 
+-  opFalse = ast2iCode (astFalse, lvl + 1);
++  opFalse = isStruct ? geniCodeStructAddress (astFalse, lvl + 1) : ast2iCode (astFalse, lvl + 1);
+   geniCodeAssign (result, geniCodeRValue (opFalse, false), 0, 0);
+ 
+   /* create the exit label */
+@@ -4724,10 +4756,8 @@ ast2iCode (ast * tree, int lvl)
+       return NULL;
+     }
+ 
+-  /* A struct or union value that is not a variable needs an object to be returned from.
+-     A conditional expression is left as it is: for these types its evaluation is wrong
+-     already (bugs #4131, #4163), which the code generators should refuse rather than hide. */
+-  if (tree->opval.op == RETURN && IS_AST_OP (tree->right) && tree->right->opval.op != '?' && IS_STRUCT (tree->right->ftype))
++  /* A struct or union value that is not a variable needs an object to be returned from. */
++  if (tree->opval.op == RETURN && IS_AST_OP (tree->right) && IS_STRUCT (tree->right->ftype))
+     {
+       geniCodeReturnStruct (tree->right, lvl);
+       return NULL;
+diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
+index 26e69c238..e88ee5137 100644
+--- a/src/mcs51/gen.c
++++ b/src/mcs51/gen.c
+@@ -5499,11 +5499,10 @@ genRet (iCode *ic)
+   size = AOP_SIZE (IC_LEFT (ic));
+   const bool bigreturn = IS_STRUCT (operandType (IC_LEFT (ic)));
+ 
+-  /* A struct arrives here as an object: a variable, or the object the front end provides for
+-     the value of another expression (geniCodeReturnStruct). A conditional expression still
+-     arrives as its address (bugs #4131, #4163), and the code below would return that address
+-     in the registers and leave the caller's object untouched (bug #4157). Until such returns
+-     are implemented, refuse them instead of generating wrong code silently. */
++  /* The operand of a struct return is an object, which is a variable or the object that the
++     front end makes for the value of another expression (geniCodeReturnStruct). For an
++     operand that is an address, the code below would return the address in the registers
++     and would not write the caller's object (bug #4157), so such a return gets an error. */
+   if (!bigreturn && IS_STRUCT (currFunc->type->next))
+     werrorfl (ic->filename, ic->lineno, E_NOT_ALLOWED,
+               "returning this struct or union expression directly (assign it to a variable and return that) is");
+diff --git a/support/regression/tests/bug-3857.c b/support/regression/tests/bug-3857.c
+new file mode 100644
+index 000000000..51b276e8d
+--- /dev/null
++++ b/support/regression/tests/bug-3857.c
+@@ -0,0 +1,86 @@
++/* bug-3857.c
++   A struct assigned from a conditional expression whose third operand
++   dereferences the pointer that a function returns got a wrong value when
++   that operand was selected. The pointer was dereferenced twice.
++ */
++
++#include <testfwk.h>
++
++typedef struct
++{
++  unsigned char x;
++  unsigned char y;
++} maths_point_u4;
++
++maths_point_u4 room1 = {11, 12};
++maths_point_u4 result;
++
++const maths_point_u4 *
++roomGet (void)
++{
++  return &room1;
++}
++
++/* the reported case */
++void
++positionAdjust (const maths_point_u4 *room, maths_point_u4 *room_new)
++{
++  *room_new = room ? *room : *roomGet ();
++}
++
++void
++g1 (const maths_point_u4 *p)
++{
++  result = p ? *p : *roomGet ();
++}
++
++/* controls, a conditional expression of pointer type and an if statement */
++void
++g2 (const maths_point_u4 *p)
++{
++  result = *(p ? p : roomGet ());
++}
++
++void
++g3 (const maths_point_u4 *p)
++{
++  if (p)
++    result = *p;
++  else
++    result = *roomGet ();
++}
++
++void
++testBug (void)
++{
++  maths_point_u4 room2 = {5, 6};
++  maths_point_u4 room3 = {7, 8};
++
++  positionAdjust (&room3, &room2);
++  ASSERT (room2.x == 7);
++  ASSERT (room2.y == 8);
++  positionAdjust (0, &room2);
++  ASSERT (room2.x == 11);
++  ASSERT (room2.y == 12);
++
++  g1 (&room3);
++  ASSERT (result.x == 7);
++  ASSERT (result.y == 8);
++  g1 (0);
++  ASSERT (result.x == 11);
++  ASSERT (result.y == 12);
++
++  g2 (&room3);
++  ASSERT (result.x == 7);
++  ASSERT (result.y == 8);
++  g2 (0);
++  ASSERT (result.x == 11);
++  ASSERT (result.y == 12);
++
++  g3 (&room3);
++  ASSERT (result.x == 7);
++  ASSERT (result.y == 8);
++  g3 (0);
++  ASSERT (result.x == 11);
++  ASSERT (result.y == 12);
++}
+diff --git a/support/regression/tests/bug-4131.c.in b/support/regression/tests/bug-4131.c.in
+new file mode 100644
+index 000000000..d884ccb55
+--- /dev/null
++++ b/support/regression/tests/bug-4131.c.in
+@@ -0,0 +1,242 @@
++/* bug-4131.c
++   A conditional expression with operands of struct or union type was
++   evaluated to one address, and the kind of that address was derived from the
++   type of the expression instead of from the objects. Returning such an
++   expression gave an internal error in the code generator (z80, stm8). For
++   mcs51 the value was read from a wrong address space when an operand was a
++   call, or when the objects of the two operands were in different address
++   spaces.
++
++   The test has three parts, because the mcs51 small model does not have the
++   memory for all of it.
++
++   part: return, assign, use
++ */
++
++#include <testfwk.h>
++
++#define PART_{part}
++
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++struct s
++{
++  unsigned char a;
++  int b;
++};
++
++union u
++{
++  unsigned char a;
++  long b;
++};
++
++struct s ga = {0x11, 0x1111};
++struct s gb = {0x22, 0x2222};
++const struct s gk = {0x33, 0x3333};
++struct s r;
++unsigned char calls;
++
++struct s
++fa (void)
++{
++  calls += 0x01;
++  return ga;
++}
++
++struct s
++fb (void)
++{
++  calls += 0x10;
++  return gb;
++}
++
++#ifdef PART_return
++/* the reported case */
++struct s
++choose (unsigned char c, struct s a, struct s b)
++{
++  return c ? a : b;
++}
++
++union u
++chooseUnion (unsigned char c, union u a, union u b)
++{
++  return c ? a : b;
++}
++
++struct s
++chooseCall (unsigned char c)
++{
++  return c ? fa () : fb ();
++}
++#endif
++
++#ifdef PART_assign
++void
++assignCalls (unsigned char c)
++{
++  r = c ? fa () : fb ();
++}
++
++void
++assignCallVar (unsigned char c)
++{
++  r = c ? fa () : gb;
++}
++
++void
++assignVarCall (unsigned char c)
++{
++  r = c ? ga : fb ();
++}
++
++void
++initCalls (unsigned char c)
++{
++  struct s l = c ? fa () : fb ();
++
++  r = l;
++}
++
++/* gk is in code memory for mcs51, and l is on the stack with --stack-auto */
++void
++assignSpaces (unsigned char c, unsigned char d)
++{
++  struct s l;
++
++  l.a = 0x66;
++  l.b = 0x6666;
++  if (d)
++    r = c ? gk : l;
++  else
++    r = c ? l : ga;
++}
++#endif
++
++#ifdef PART_use
++int
++getB (struct s v)
++{
++  return v.b;
++}
++
++int
++argument (unsigned char c)
++{
++  return getB (c ? fa () : gk);
++}
++
++int
++member (unsigned char c)
++{
++  return (c ? gk : fb ()).b;
++}
++
++void
++nested (unsigned char c, unsigned char d)
++{
++  r = c ? (d ? fa () : fb ()) : gk;
++}
++#endif
++#endif
++
++void
++testBug (void)
++{
++#if !defined(__SDCC_hc08) && !defined(__SDCC_s08) && !defined(SDCC_MOS) // struct return not yet supported
++#ifdef PART_return
++  union u ux, uy, ur;
++
++  r = choose (1, ga, gb);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  r = choose (0, ga, gb);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++
++  ux.b = 0x01020304;
++  uy.b = 0x05060708;
++  ur = chooseUnion (1, ux, uy);
++  ASSERT (ur.b == 0x01020304);
++  ur = chooseUnion (0, ux, uy);
++  ASSERT (ur.b == 0x05060708);
++
++  calls = 0;
++  r = chooseCall (1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  ASSERT (calls == 0x01);
++  r = chooseCall (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  ASSERT (calls == 0x11);
++#endif
++
++#ifdef PART_assign
++  calls = 0;
++  assignCalls (1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  ASSERT (calls == 0x01);
++  assignCalls (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  ASSERT (calls == 0x11);
++
++  assignCallVar (1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  assignCallVar (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  ASSERT (calls == 0x12);
++
++  assignVarCall (1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  assignVarCall (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  ASSERT (calls == 0x22);
++
++  initCalls (1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  initCalls (0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  ASSERT (calls == 0x33);
++
++  assignSpaces (1, 1);
++  ASSERT (r.a == 0x33);
++  ASSERT (r.b == 0x3333);
++  assignSpaces (0, 1);
++  ASSERT (r.a == 0x66);
++  ASSERT (r.b == 0x6666);
++  assignSpaces (1, 0);
++  ASSERT (r.a == 0x66);
++  ASSERT (r.b == 0x6666);
++  assignSpaces (0, 0);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++#endif
++
++#ifdef PART_use
++  ASSERT (argument (1) == 0x1111);
++  ASSERT (argument (0) == 0x3333);
++
++  ASSERT (member (1) == 0x3333);
++  ASSERT (member (0) == 0x2222);
++
++  nested (1, 1);
++  ASSERT (r.a == 0x11);
++  ASSERT (r.b == 0x1111);
++  nested (1, 0);
++  ASSERT (r.a == 0x22);
++  ASSERT (r.b == 0x2222);
++  nested (0, 1);
++  ASSERT (r.a == 0x33);
++  ASSERT (r.b == 0x3333);
++#endif
++#endif
++}
+diff --git a/support/regression/tests/bug-4163.c b/support/regression/tests/bug-4163.c
+new file mode 100644
+index 000000000..d5562e8ee
+--- /dev/null
++++ b/support/regression/tests/bug-4163.c
+@@ -0,0 +1,90 @@
++/* bug-4163.c
++   A struct initialized from a conditional expression whose operands are
++   dereferenced pointers or array elements got its bytes from the address
++   that the first bytes of the selected object formed.
++ */
++
++#include <testfwk.h>
++
++typedef struct
++{
++  unsigned char x;
++  unsigned char y;
++} point;
++
++point room1 = {11, 12};
++point rooms[3] = {{21, 22}, {31, 32}, {41, 42}};
++point result;
++
++const point *
++roomGet (void)
++{
++  return &room1;
++}
++
++/* the reported case */
++void
++initialiser (const point *room)
++{
++  point room2 = room ? *room : *roomGet ();
++
++  result = room2;
++}
++
++void
++derefs (unsigned char c, const point *p, const point *q)
++{
++  point room2 = c ? *p : *q;
++
++  result = room2;
++}
++
++void
++elements (unsigned char c, unsigned char i, const point *p)
++{
++  point room2 = c ? rooms[i] : p[1];
++
++  result = room2;
++}
++
++void
++variableAndElement (unsigned char c)
++{
++  point room2 = c ? room1 : rooms[1];
++
++  result = room2;
++}
++
++void
++testBug (void)
++{
++  point room = {5, 6};
++
++  initialiser (&room);
++  ASSERT (result.x == 5);
++  ASSERT (result.y == 6);
++  initialiser (0);
++  ASSERT (result.x == 11);
++  ASSERT (result.y == 12);
++
++  derefs (1, &room, rooms);
++  ASSERT (result.x == 5);
++  ASSERT (result.y == 6);
++  derefs (0, &room, rooms);
++  ASSERT (result.x == 21);
++  ASSERT (result.y == 22);
++
++  elements (1, 2, rooms);
++  ASSERT (result.x == 41);
++  ASSERT (result.y == 42);
++  elements (0, 2, rooms);
++  ASSERT (result.x == 31);
++  ASSERT (result.y == 32);
++
++  variableAndElement (1);
++  ASSERT (result.x == 11);
++  ASSERT (result.y == 12);
++  variableAndElement (0);
++  ASSERT (result.x == 31);
++  ASSERT (result.y == 32);
++}

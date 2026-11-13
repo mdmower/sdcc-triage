@@ -1,0 +1,361 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 14:03:36 -0800
+Subject: [PATCH] [bugs #3701] Accept a second declaration of an identifier
+ with linkage in a block
+
+addSymChain() rejected every declaration that named an identifier of
+the same block again, with error 91 when one of the two declarations
+was extern. C11 6.7 paragraph 3 limits identifiers without linkage to
+one declaration in a scope. Objects that are declared extern and
+functions have linkage, so
+
+    void f (void)
+    {
+      extern const uint8_t * const name_data[];
+      extern const uint8_t * const name_data[];
+    }
+
+is valid.
+
+addSymChain() now treats two such declarations in a block like two
+declarations at file scope. It completes the array length and the
+prototype in both types and compares the types. The symbol of the
+first declaration stays in the symbol table, because resolveSymbols()
+finds the symbol for an expression by level, block, and sequence
+point, and expressions between the two declarations need it.
+addSymChain() takes the symbol of the second declaration out of the
+chain. The actions of the two declaration_list rules now add the chain
+to the list of the block after that call. A second declaration that
+has an initializer gets error 91 as before.
+
+addSymChain() read the extern flag from the first link of the type
+when it tested for a visible declaration without linkage. That link
+has the flag only when the type does not have a declarator, so a
+block-scope extern declaration of an array, a pointer, or a function
+counted as a declaration without linkage. addSymChain() then compared
+the type of a further extern declaration exactly with the type at file
+scope. For
+
+    int a[2];
+
+    int f (void)
+    {
+      extern int a[];
+      {
+        extern int a[];
+        return a[1];
+      }
+    }
+
+the inner declaration got error 91, and so did a second declaration
+in the block of the first one. The flag is now read from the
+specifier.
+
+Adds tests/bug-3701.c to the regression suite and to valdiag.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCC.y                          |  10 ++-
+ src/SDCCsymt.c                      |  18 ++++-
+ support/regression/tests/bug-3701.c | 108 ++++++++++++++++++++++++++++
+ support/valdiag/tests/bug-3701.c    |  94 ++++++++++++++++++++++++
+ 4 files changed, 225 insertions(+), 5 deletions(-)
+ create mode 100644 support/regression/tests/bug-3701.c
+ create mode 100644 support/valdiag/tests/bug-3701.c
+
+diff --git a/src/SDCC.y b/src/SDCC.y
+index b91962c44..79628423f 100644
+--- a/src/SDCC.y
++++ b/src/SDCC.y
+@@ -3171,6 +3171,9 @@ declaration_list
+          werror (E_VLA_OBJECT);
+        else*/
+          addSymChain(&$1);
++       /* addSymChain() takes a symbol out of the chain when it declares an identifier of this block again */
++       if ($$)
++         $$ = $1;
+      }
+ 
+    | declaration_list declaration
+@@ -3180,9 +3183,12 @@ declaration_list
+        /* if this is a typedef */
+        if ($2 && IS_TYPEDEF($2->etype)) {
+          allocVariables ($2);
++         addSymChain(&$2);
+          $$ = $1;
+        }
+        else {
++         /* addSymChain() takes a symbol out of the chain when it declares an identifier of this block again */
++         addSymChain(&$2);
+          /* get to the end of the previous decl */
+          if ( $1 ) {
+            $$ = sym = $1;
+@@ -3196,8 +3202,8 @@ declaration_list
+        ignoreTypedefType = 0;/*printf("2 %s %d %d\n", $1->name, IS_ARRAY ($1->type), DCL_ARRAY_VLA ($1->type));
+        if (IS_ARRAY ($2->type) && DCL_ARRAY_VLA ($2->type))
+          werror (E_VLA_OBJECT);
+-       else*/
+-         addSymChain(&$2);
++       else
++         addSymChain(&$2);*/
+      }
+    ;
+ 
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index d4337dfae..b9ac44874 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -1594,7 +1594,7 @@ addSymChain (symbol **symHead)
+         {
+           symbol *csym;
+           bool declaration_with_no_linkage_visible =
+-            (csym = findSymWithLevel (SymbolTab, sym)) && csym->level && !IS_STATIC (csym->etype) && !IS_EXTERN (csym->type);
++            (csym = findSymWithLevel (SymbolTab, sym)) && csym->level && !IS_STATIC (csym->etype) && !IS_EXTERN (csym->etype);
+ 
+           long saveLevel = sym->level;
+           sym->level = 0;
+@@ -1629,8 +1629,9 @@ addSymChain (symbol **symHead)
+         {
+           /* if not formal parameter and not in file scope
+              then show symbol redefined error
+-             else check if symbols have compatible types */
+-          if (!sym->_isparm && sym->level > 0)
++             else check if symbols have compatible types.
++             Identifiers that have linkage can be declared in a block more than once. */
++          if (!sym->_isparm && sym->level > 0 && !(IS_EXTERN (csym->etype) && IS_EXTERN (sym->etype) && !sym->ival))
+             error = 1;
+           else
+             {
+@@ -1717,6 +1718,17 @@ addSymChain (symbol **symHead)
+               continue;
+             }
+ 
++          /* In a block, the symbol of the first declaration stays in the symbol table with
++             the composite type. Take the symbol of this declaration out of the chain. */
++          if (!sym->_isparm && sym->level > 0)
++            {
++              symPtrPtr = symHead;
++              while (*symPtrPtr != sym)
++                symPtrPtr = &(*symPtrPtr)->next;
++              *symPtrPtr = sym->next;
++              continue;
++            }
++
+           if (FUNC_BANKED (csym->type) || FUNC_BANKED (sym->type))
+             {
+               if (FUNC_NONBANKED (csym->type) || FUNC_NONBANKED (sym->type))
+diff --git a/support/regression/tests/bug-3701.c b/support/regression/tests/bug-3701.c
+new file mode 100644
+index 000000000..352d728c2
+--- /dev/null
++++ b/support/regression/tests/bug-3701.c
+@@ -0,0 +1,108 @@
++/* bug-3701.c
++   Identifiers that have linkage could not be declared in a block more than
++   once. The second declaration of an object or of a function got error 91,
++   also when a macro declared the object each time it was used.
++ */
++
++#include <testfwk.h>
++
++#include <stdint.h>
++
++const uint8_t d0[2] = {1, 2};
++const uint8_t d1[1] = {3};
++const uint8_t *name_data[2] = {d0, d1};
++
++#define NAME(i) extern const uint8_t *name_data[]; p = name_data[i]
++
++static uint8_t
++byMacro (void)
++{
++  const uint8_t *p;
++  uint8_t sum;
++
++  NAME (0);
++  sum = p[1];
++  NAME (1);
++  sum += p[0];
++
++  return sum;
++}
++
++static int
++arrays (void)
++{
++  extern const uint8_t *name_data[];
++  extern const uint8_t *name_data[];
++  extern int values[];
++  extern int values[3];
++  extern int values[];
++
++  return name_data[0][0] + values[1] + sizeof (values) / sizeof (values[0]);
++}
++
++void bump (void);
++
++static int
++objects (void)
++{
++  extern int counter, counter;
++  extern int counter;
++
++  counter = 5;
++  extern int counter;
++  counter++;
++  bump ();
++  extern int counter;
++
++  return counter;
++}
++
++static int
++hidden (void)
++{
++  int counter = 1;
++
++  {
++    extern int counter;
++    extern int counter;
++    counter = 20;
++  }
++
++  return counter;
++}
++
++static int
++functions (void)
++{
++  int add (int, int);
++  extern int add (int a, int b);
++  int add (int, int);
++
++  return add (3, 4);
++}
++
++int values[3] = {7, 8, 9};
++int counter;
++
++void
++bump (void)
++{
++  counter++;
++}
++
++int
++add (int a, int b)
++{
++  return a + b;
++}
++
++void
++testBug (void)
++{
++  ASSERT (byMacro () == 5);
++  ASSERT (arrays () == 12);
++  ASSERT (objects () == 7);
++  ASSERT (hidden () == 1);
++  ASSERT (counter == 20);
++  ASSERT (functions () == 7);
++}
+diff --git a/support/valdiag/tests/bug-3701.c b/support/valdiag/tests/bug-3701.c
+new file mode 100644
+index 000000000..77199f2cf
+--- /dev/null
++++ b/support/valdiag/tests/bug-3701.c
+@@ -0,0 +1,94 @@
++/* bug-3701.c
++
++   Identifiers that have linkage can be declared in a block more than once.
++   The types have to be compatible, and identifiers without linkage cannot
++   be declared again.
++ */
++
++#ifdef TEST1
++const char *const names[2] = {"a", "b"};
++
++char f(void)
++{
++  extern const char *const names[];
++  extern const char *const names[];
++  extern int i, i;
++  extern int i;
++
++  return names[i][0];
++}
++#endif
++
++#ifdef TEST2
++int f(void)
++{
++  int g(int);
++  extern int g(int);
++  int g(int);
++
++  return g(1);
++}
++#endif
++
++#ifdef TEST3
++int a[2];
++
++int f(void)
++{
++  extern int a[];
++  {
++    extern int a[];
++    a[0]++;
++  }
++  return a[1];
++}
++#endif
++
++#ifdef TEST4
++int f(void)
++{
++  extern int i; /* IGNORE */
++  extern char i; /* ERROR */
++
++  return i; /* IGNORE */
++}
++#endif
++
++#ifdef TEST5
++int f(void)
++{
++  extern int a[2]; /* IGNORE */
++  extern int a[3]; /* ERROR */
++
++  return a[0]; /* IGNORE */
++}
++#endif
++
++#ifdef TEST6
++int f(void)
++{
++  int i; /* IGNORE */
++  extern int i; /* ERROR */
++
++  return i; /* IGNORE */
++}
++#endif
++
++#ifdef TEST7
++int f(void)
++{
++  extern int i; /* IGNORE */
++  int i; /* ERROR */
++
++  return i; /* IGNORE */
++}
++#endif
++
++#ifdef TEST8
++int f(int i) /* IGNORE */
++{
++  extern int i; /* ERROR */
++
++  return i; /* IGNORE */
++}
++#endif

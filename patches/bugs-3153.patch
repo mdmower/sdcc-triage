@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 13:53:22 -0800
+Subject: [PATCH] [bugs #3153] sdld: accept the line symbols of --debug from
+ more than one module
+
+With --debug, cdbWriteCLine() defines a global symbol at each line of C
+code. Its name has the base name of the source file, the line, the
+level, and the block number, as in C$inline.h$16$1_0$2. Modules that
+include a header with a static function define equal names when the
+function has the same block number in each of them. The linker reported
+"Multiple definition" for each name and the link failed. r12010 removed
+the symbols from code that the compiler expands inline, which is the
+case of the ticket. The link still failed for static functions, inline
+or not.
+
+newsym() now creates a symbol entry for each definition of a name that
+begins with C$. The map file and the .cdb file have one address per
+module for such a line. The files already had several addresses for one
+line when the block numbers of the function differ between the modules,
+because the names then differ.
+
+The regression suite links one module per test and does not pass
+--debug, so this change does not have a test there.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ sdas/linksrc/lksym.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/sdas/linksrc/lksym.c b/sdas/linksrc/lksym.c
+index bb9336f40..0d8448fdb 100644
+--- a/sdas/linksrc/lksym.c
++++ b/sdas/linksrc/lksym.c
+@@ -167,6 +167,22 @@ newsym(void)
+ 	} else
+ 	if (c == 'D') {
+ 		ev = eval();
++#if SDCDB
++		/*
++		 * SDCC names the symbols for lines of C code
++		 * C$file$line$level$block.  These names are not unique
++		 * when several modules have code from one file, such as
++		 * a static function in a header.  Create a symbol entry
++		 * for each definition.
++		 */
++		if (tsp->s_type & S_DEF && id[0] == 'C' && id[1] == '$') {
++			tsp = (struct sym *) new (sizeof(struct sym));
++			i = hash(id, zflag);
++			tsp->s_sp = symhash[i];
++			symhash[i] = tsp;
++			tsp->s_id = strsto(id);
++		}
++#endif
+                 if (tsp->s_type & S_DEF &&
+                     !(tsp->s_addr == ev && tsp->s_axp && tsp->s_axp->a_bap && ((tsp->s_axp->a_bap->a_flag & A3_ABS) == A3_ABS))) {
+ 				fprintf(stderr,

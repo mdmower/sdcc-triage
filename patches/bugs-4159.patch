@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 12:31:45 -0800
+Subject: [PATCH] [bugs #4159] Read identifiers after a struct or union tag as
+ declarator names
+
+The action of struct_or_union sets ignoreTypedefType, so that the lexer
+returns the tag as an identifier when a typedef of the same name is
+visible. The action of stag cleared the flag. The parser reads the
+token after the tag before it reduces the specifier, because the choice
+between a specifier with a member list and one without depends on that
+token. The lexer therefore returned TYPE_NAME for an identifier after
+the tag when a typedef of that name was visible, and mergeSpec()
+reported error 141 (two or more data types in declaration) for
+
+    typedef struct s s_t;
+    typedef struct s s_t;
+
+which C11 allows, and for `struct s t;` in the scope of a typedef
+named t.
+
+The action of stag now sets the flag. Identifiers after the tag are
+declarator names, and the lexer clears the flag when it reads the '{'
+of a member list. For a second typedef that gives the name a different
+type, the compiler reports error 0 (Duplicate symbol) and error 51
+where it reported error 141.
+
+Adds support/regression/tests/bug-4159.c and
+support/valdiag/tests/bug-4159.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCC.y                          |  5 +-
+ support/regression/tests/bug-4159.c | 79 +++++++++++++++++++++++++++++
+ support/valdiag/tests/bug-4159.c    | 36 +++++++++++++
+ 3 files changed, 119 insertions(+), 1 deletion(-)
+ create mode 100644 support/regression/tests/bug-4159.c
+ create mode 100644 support/valdiag/tests/bug-4159.c
+
+diff --git a/src/SDCC.y b/src/SDCC.y
+index 501e58b9c..27ffb56d2 100644
+--- a/src/SDCC.y
++++ b/src/SDCC.y
+@@ -2988,7 +2988,10 @@ opt_stag
+ stag
+    : identifier
+         {  /* add name to structure table */
+-          ignoreTypedefType = 0;
++          /* Identifiers that follow the tag are declarator names, even when
++             typedefs of those names are visible. The lexer clears the flag
++             at '{'. */
++          ignoreTypedefType = 1;
+           $$ = newStruct($1->name);
+           $$->level = NestLevel;
+           $$->block = currBlockno;
+diff --git a/support/regression/tests/bug-4159.c b/support/regression/tests/bug-4159.c
+new file mode 100644
+index 000000000..dff22d812
+--- /dev/null
++++ b/support/regression/tests/bug-4159.c
+@@ -0,0 +1,79 @@
++/* bug-4159.c
++   An identifier after a struct or union tag was read as a typedef name when
++   a typedef of that name was visible. Error 141 was given for a typedef that
++   repeats an earlier typedef of the tag and for an object that hides a
++   typedef name.
++ */
++
++#include <testfwk.h>
++
++typedef unsigned char t;
++
++#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
++typedef struct s s_t;
++typedef struct s s_t;
++
++typedef union u u_t;
++typedef union u u_t;
++
++typedef struct d { unsigned char a; } d_t;
++typedef struct d d_t;
++
++typedef const struct s cs_t;
++typedef const struct s cs_t;
++#else
++typedef struct s s_t;
++typedef union u u_t;
++typedef struct d { unsigned char a; } d_t;
++typedef const struct s cs_t;
++#endif
++
++struct s { unsigned char a; };
++union u { unsigned char a; unsigned char b; };
++
++/* Members named like typedefs, followed by members of those types. */
++struct o { struct s t; union u d_t; t x; d_t y; };
++
++s_t gs;
++u_t gu;
++d_t gd;
++cs_t gc = {9};
++struct o go;
++
++void
++testTypedef (void)
++{
++  gs.a = 5;
++  gu.b = 7;
++  gd.a = sizeof (struct s) + sizeof (t);
++  ASSERT (gs.a == 5);
++  ASSERT (gu.a == 7);
++  ASSERT (gd.a == 2);
++  ASSERT (gc.a == 9);
++}
++
++void
++testHide (void)
++{
++  struct s t, d_t;
++  union u s_t;
++  struct s u_t = {2};
++
++  t.a = 3;
++  d_t.a = t.a + 2;
++  s_t.b = 4;
++  ASSERT (t.a == 3);
++  ASSERT (d_t.a == 5);
++  ASSERT (s_t.a == 4);
++  ASSERT (u_t.a == 2);
++}
++
++void
++testMember (void)
++{
++  go.t.a = 1;
++  go.d_t.b = 2;
++  go.x = 3;
++  go.y.a = 4;
++  ASSERT (go.t.a + go.d_t.a + go.x + go.y.a == 10);
++}
+diff --git a/support/valdiag/tests/bug-4159.c b/support/valdiag/tests/bug-4159.c
+new file mode 100644
+index 000000000..cbcec9e67
+--- /dev/null
++++ b/support/valdiag/tests/bug-4159.c
+@@ -0,0 +1,36 @@
++/* bug-4159.c
++
++   An identifier after a struct or union tag was read as a typedef name when
++   a typedef of that name was visible, so error 141 was given for a typedef
++   that repeats an earlier typedef of the tag. C11 allows such a typedef when
++   it denotes the same type.
++ */
++
++#ifdef TEST1
++typedef struct s s_t;
++typedef struct s s_t;
++typedef union u u_t;
++typedef union u u_t;
++typedef struct d { unsigned char a; } d_t;
++typedef struct d d_t;
++#endif
++
++#ifdef TEST2
++struct s { unsigned char a; };
++struct r { unsigned char a; };
++typedef struct s s_t;	/* IGNORE */
++typedef struct r s_t;	/* ERROR */
++#endif
++
++/* Standards before C11 do not allow a second typedef of a name. */
++#ifdef TEST3_C99
++typedef struct s s_t;	/* IGNORE */
++typedef struct s s_t;	/* ERROR(SDCC) */ /* IGNORE(GCC) */
++#endif
++
++/* A typedef name after the tag is a second type specifier. */
++#ifdef TEST4
++typedef unsigned char t;
++struct s { unsigned char a; };
++struct s t x;		/* ERROR */
++#endif
