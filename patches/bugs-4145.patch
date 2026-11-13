@@ -30,10 +30,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-4145.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index b1cfa3185..9f4ec2c3c 100644
+index 47c596bd8..7f9373d38 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -2233,8 +2233,9 @@ constExprValue (ast * cexpr, int check)
+@@ -2245,8 +2245,9 @@ constExprValue (ast * cexpr, int check)
            return valCastLiteral (cexpr->ftype, floatFromVal (cexpr->right->opval.val), (TYPE_TARGET_ULONGLONG) ullFromVal (cexpr->right->opval.val));
          }
  
@@ -43,9 +43,9 @@ index b1cfa3185..9f4ec2c3c 100644
 +         expression computed from one can inherit the marker through its type */
 +      if (IS_AST_SYM_VALUE (cexpr) && IS_CONSTEXPR (cexpr->ftype))
          {
-           value *ivalAsVal = list2val (AST_SYMBOL (cexpr)->ival, check);
-           value *val = valRecastLitVal (cexpr->etype, ivalAsVal);
-@@ -3876,7 +3877,9 @@ rewriteStructAssignment (ast *tree)
+           /* Evaluation may replace the initialiser root (e.g. _Generic). */
+           value *ivalAsVal = list2val (copyIlist (AST_SYMBOL (cexpr)->ival), check);
+@@ -3889,7 +3890,9 @@ rewriteStructAssignment (ast *tree)
  void
  propagateConstExpr (ast **ptree, RESULT_TYPE resultType, bool reduceTypeAllowed)
  {
@@ -56,7 +56,7 @@ index b1cfa3185..9f4ec2c3c 100644
      {
        ast *newAst = newAst_VALUE (constExprValue (*ptree, true));
        copyAstLoc (newAst, *ptree);
-@@ -6773,6 +6776,13 @@ typeofOp (ast *tree)
+@@ -6786,6 +6789,13 @@ typeofOp (ast *tree)
    SPEC_SCLS (spec_type) = 0;
    SPEC_STAT (spec_type) = 0;
    SPEC_EXTR (spec_type) = 0;

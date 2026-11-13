@@ -41,7 +41,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/compound-literal-eval.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 16aa17072..6e9e9e6b8 100644
+index dd3e1bd48..fd6164bf0 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -79,6 +79,7 @@ ast *optimizeGetWord (ast *, RESULT_TYPE);
@@ -52,7 +52,7 @@ index 16aa17072..6e9e9e6b8 100644
  void gatherImplicitVariables (ast *, ast *);
  void PA (ast * t);
  int inInitMode = 0;
-@@ -2090,6 +2091,12 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
+@@ -2102,6 +2103,12 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
            // if this is a constexpr, keep the ival for compile-time evaluation
            if (!(IS_CONSTEXPR (sym->etype)))
              sym->ival = NULL;
@@ -65,7 +65,7 @@ index 16aa17072..6e9e9e6b8 100644
            if (init)
              init = newNode (NULLOP, init, work);
            else
-@@ -3351,6 +3358,76 @@ getLeftResultType (ast * tree, RESULT_TYPE resultType)
+@@ -3336,6 +3343,76 @@ getLeftResultType (ast * tree, RESULT_TYPE resultType)
      }
  }
  
@@ -142,7 +142,7 @@ index 16aa17072..6e9e9e6b8 100644
  /*------------------------------------------------------------------*/
  /* gatherImplicitVariables:  adds the symbols created by            */
  /*            replaceAstWithTemporary to the declarations list of   */
-@@ -3408,9 +3485,18 @@ gatherImplicitVariables (ast *tree, ast *block)
+@@ -3393,9 +3470,18 @@ gatherImplicitVariables (ast *tree, ast *block)
  
            *decl = tempsym;
            AST_SYMBOL (tree)->iscomplit = false;

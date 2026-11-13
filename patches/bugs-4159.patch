@@ -38,10 +38,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-4159.c
 
 diff --git a/src/SDCC.y b/src/SDCC.y
-index 501e58b9c..27ffb56d2 100644
+index 0bc9cc8d4..d0edec21f 100644
 --- a/src/SDCC.y
 +++ b/src/SDCC.y
-@@ -2988,7 +2988,10 @@ opt_stag
+@@ -2987,7 +2987,10 @@ opt_stag
  stag
     : identifier
          {  /* add name to structure table */

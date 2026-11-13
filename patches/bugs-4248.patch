@@ -27,10 +27,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-4248.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 1176a86f0..6eed96f33 100644
+index cd3bbcf39..7019ef869 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -1841,10 +1841,18 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
+@@ -1848,10 +1848,18 @@ gatherAutoInit (symbol * autoChain, ast * block, int *stack)
    ast *init = NULL;
    ast *work;
    symbol *sym;

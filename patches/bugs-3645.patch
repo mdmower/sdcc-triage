@@ -21,7 +21,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-3645.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 9f4ec2c3c..91397bc09 100644
+index 7f9373d38..5dcedcb59 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -1673,7 +1673,10 @@ createIvalCharPtr (ast * sym, sym_link * type, ast * iexpr, ast * rootVal)

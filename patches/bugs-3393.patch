@@ -50,10 +50,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3393-nested.c
 
 diff --git a/src/SDCCglue.c b/src/SDCCglue.c
-index 4232d9540..105170ea8 100644
+index 41da1dfb5..4a055eb28 100644
 --- a/src/SDCCglue.c
 +++ b/src/SDCCglue.c
-@@ -1098,6 +1098,28 @@ fieldHasIval (symbol *field)
+@@ -1109,6 +1109,28 @@ fieldHasIval (symbol *field)
    return !(IS_BITFIELD (field->type) && SPEC_BUNNAMED (field->etype));
  }
  
@@ -82,7 +82,7 @@ index 4232d9540..105170ea8 100644
  /*-----------------------------------------------------------------*/
  /* designatedAlternative - an anonymous union is initialized       */
  /*   through its first alternative, which is what the walk in      */
-@@ -1105,14 +1127,19 @@ fieldHasIval (symbol *field)
+@@ -1116,14 +1138,19 @@ fieldHasIval (symbol *field)
  /*   another one instead ({.d = 5}), and reorderIlistIval() fills  */
  /*   a promoted member's slot only in that case. If the union      */
  /*   starting at SFLDS has one, return that member, its            */
@@ -104,7 +104,7 @@ index 4232d9540..105170ea8 100644
  
    for (f = sflds; f; f = f->next)
      {
-@@ -1137,11 +1164,81 @@ designatedAlternative (symbol *sflds, initList *iloop, initList **ilist, symbol
+@@ -1148,11 +1175,81 @@ designatedAlternative (symbol *sflds, initList *iloop, initList **ilist, symbol
      }
  
    /* only when sflds is where that union starts */
@@ -189,7 +189,7 @@ index 4232d9540..105170ea8 100644
    return desig;
  }
  
-@@ -1232,13 +1329,17 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
+@@ -1243,13 +1340,17 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
          sflds = sflds->next;
  
        unsigned int written = 0;     /* bytes emitted = offset of the next byte */

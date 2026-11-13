@@ -31,7 +31,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3121.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 31ecbaabc..f07469364 100644
+index bc7fc7068..12ec678fc 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -1278,6 +1278,87 @@ findStructField (symbol *fields, symbol *target)
@@ -201,7 +201,7 @@ index 31ecbaabc..f07469364 100644
  
    /* if we have not been given a size  */
 diff --git a/src/SDCCval.c b/src/SDCCval.c
-index 74fcbf9c6..dd03a09c0 100644
+index edf520d98..c2a94ffe4 100644
 --- a/src/SDCCval.c
 +++ b/src/SDCCval.c
 @@ -582,10 +582,14 @@ nextInitSlot (sym_link * type, int slot)
@@ -305,7 +305,7 @@ index 74fcbf9c6..dd03a09c0 100644
  
  /*------------------------------------------------------------------*/
 diff --git a/src/SDCCval.h b/src/SDCCval.h
-index c4ffaff60..d40e0d9b4 100644
+index 7ca202eed..5f6c5032c 100644
 --- a/src/SDCCval.h
 +++ b/src/SDCCval.h
 @@ -168,6 +168,7 @@ designation *revDesignation (designation *);

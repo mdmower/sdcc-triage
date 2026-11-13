@@ -36,7 +36,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3992.c
 
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index 031677c86..d4337dfae 100644
+index 60618aef8..a73d0215b 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
 @@ -2728,7 +2728,12 @@ leaveBlockScope (int block)

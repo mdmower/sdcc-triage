@@ -39,7 +39,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/struct-return-funcattr.c
 
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index 07ef160a3..5dcaaa0e3 100644
+index cb46a6639..793dfa57a 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
 @@ -4465,9 +4465,25 @@ processFunc (symbol *func, sym_link *funcType)

@@ -22,10 +22,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-2997.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 394f61a96..4f74c3571 100644
+index 6faf7af38..3dd255bfb 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -8007,7 +8007,14 @@ expandInlineFuncs (ast * tree, ast * block)
+@@ -8020,7 +8020,14 @@ expandInlineFuncs (ast * tree, ast * block)
            /* {{inline_function_code}}, retsym                         */
            tree->opval.op = ',';
            if (IFFUNC_ISCRITICAL (func->type))

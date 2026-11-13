@@ -34,10 +34,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3849.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index b800e9ef0..a70e875ab 100644
+index f95d811a3..979f7871f 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -4029,6 +4029,31 @@ rewriteStructAssignment (ast *tree)
+@@ -4014,6 +4014,31 @@ rewriteStructAssignment (ast *tree)
    return decorateType (newTree, RESULT_TYPE_OTHER, true);
  }
  
@@ -70,7 +70,7 @@ index b800e9ef0..a70e875ab 100644
  /* propagateConstExpr - propagates the value of an AST declared */
  /* 'constexpr' to the current AST node, which it replaces.      */
 diff --git a/src/SDCCast.h b/src/SDCCast.h
-index 540df19e9..e69e04106 100644
+index 55fd649b4..87dd79b9a 100644
 --- a/src/SDCCast.h
 +++ b/src/SDCCast.h
 @@ -215,6 +215,7 @@ ast *offsetofOp (sym_link * type, ast * snd);

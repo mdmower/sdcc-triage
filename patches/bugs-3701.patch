@@ -65,10 +65,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-3701.c
 
 diff --git a/src/SDCC.y b/src/SDCC.y
-index b91962c44..79628423f 100644
+index db7649fc9..2f38815a0 100644
 --- a/src/SDCC.y
 +++ b/src/SDCC.y
-@@ -3171,6 +3171,9 @@ declaration_list
+@@ -3170,6 +3170,9 @@ declaration_list
           werror (E_VLA_OBJECT);
         else*/
           addSymChain(&$1);
@@ -78,7 +78,7 @@ index b91962c44..79628423f 100644
       }
  
     | declaration_list declaration
-@@ -3180,9 +3183,12 @@ declaration_list
+@@ -3179,9 +3182,12 @@ declaration_list
         /* if this is a typedef */
         if ($2 && IS_TYPEDEF($2->etype)) {
           allocVariables ($2);
@@ -91,7 +91,7 @@ index b91962c44..79628423f 100644
           /* get to the end of the previous decl */
           if ( $1 ) {
             $$ = sym = $1;
-@@ -3196,8 +3202,8 @@ declaration_list
+@@ -3195,8 +3201,8 @@ declaration_list
         ignoreTypedefType = 0;/*printf("2 %s %d %d\n", $1->name, IS_ARRAY ($1->type), DCL_ARRAY_VLA ($1->type));
         if (IS_ARRAY ($2->type) && DCL_ARRAY_VLA ($2->type))
           werror (E_VLA_OBJECT);
@@ -103,7 +103,7 @@ index b91962c44..79628423f 100644
     ;
  
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index d4337dfae..b9ac44874 100644
+index a73d0215b..88836c354 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
 @@ -1594,7 +1594,7 @@ addSymChain (symbol **symHead)

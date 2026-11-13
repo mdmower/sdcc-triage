@@ -59,7 +59,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3979.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 6e9e9e6b8..cff6fa4c6 100644
+index fd6164bf0..b3abc248b 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -1279,6 +1279,56 @@ findStructField (symbol *fields, symbol *target)
@@ -170,10 +170,10 @@ index 6e9e9e6b8..cff6fa4c6 100644
  
    // Handle the rest and fill in the gaps.
 diff --git a/src/SDCCglue.c b/src/SDCCglue.c
-index 105170ea8..b2d663575 100644
+index 4a055eb28..b3e2be18a 100644
 --- a/src/SDCCglue.c
 +++ b/src/SDCCglue.c
-@@ -1242,6 +1242,37 @@ designatedAlternative (symbol *sflds, bool isunion, initList *iloop, initList **
+@@ -1253,6 +1253,37 @@ designatedAlternative (symbol *sflds, bool isunion, initList *iloop, initList **
    return desig;
  }
  
@@ -211,7 +211,7 @@ index 105170ea8..b2d663575 100644
  /*-----------------------------------------------------------------*/
  /* firstIsAnonStruct - a union is initialized through its first    */
  /*   member. When that is an anonymous struct, there are several   */
-@@ -1293,33 +1324,43 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
+@@ -1304,33 +1335,43 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
       its other members are skipped there as aliases */
    if (SPEC_STRUCT (type)->type == UNION && !firstIsAnonStruct (sflds))
      {
@@ -270,7 +270,7 @@ index 105170ea8..b2d663575 100644
      }
    else
      {
-@@ -1346,14 +1387,25 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
+@@ -1357,14 +1398,25 @@ printIvalStruct (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oB
                // A designator picked an alternative of this anonymous union
                // other than the first one, so emit the union through that
                // member: the bytes before it get no initializer, and the ones
@@ -304,7 +304,7 @@ index 105170ea8..b2d663575 100644
            else if (IS_BITFIELD (sflds->type))
              {
 diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
-index 5dcaaa0e3..031677c86 100644
+index 793dfa57a..60618aef8 100644
 --- a/src/SDCCsymt.c
 +++ b/src/SDCCsymt.c
 @@ -2110,6 +2110,7 @@ promoteAnonStructs (structdef * sdef)
@@ -391,7 +391,7 @@ index 7cf3874af..3f35ec74c 100644
  void checkPtrTargetQualifiers (sym_link *, sym_link *);
  void checkPtrTargetQualifiersAfterDecay (sym_link *, sym_link *);
 diff --git a/src/SDCCval.c b/src/SDCCval.c
-index 857b5f347..1bdb12890 100644
+index 4bcade3fb..6ba5b4911 100644
 --- a/src/SDCCval.c
 +++ b/src/SDCCval.c
 @@ -705,6 +705,22 @@ unbraceAnonInit (sym_link * type, initList * iloop, int idx, int last, int level
@@ -443,7 +443,7 @@ index 857b5f347..1bdb12890 100644
    return nlist;
  }
 diff --git a/src/SDCCval.h b/src/SDCCval.h
-index cdb48370f..063ff1870 100644
+index 0685edf95..c9094fda1 100644
 --- a/src/SDCCval.h
 +++ b/src/SDCCval.h
 @@ -64,6 +64,8 @@ typedef struct initList

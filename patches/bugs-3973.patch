@@ -34,16 +34,18 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-3973.c
 
 diff --git a/src/SDCCglue.c b/src/SDCCglue.c
-index b0c3bee52..4232d9540 100644
+index 27e9e0c56..41da1dfb5 100644
 --- a/src/SDCCglue.c
 +++ b/src/SDCCglue.c
-@@ -851,14 +851,28 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+@@ -851,6 +851,7 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
  {
    value *val;
    unsigned long ulVal = 0;
 +  bool strlit;
  
-   /* if initList is deep */
+   if (IS_CONSTEXPR (sym->etype) && !SPEC_IMPLICIT_CONSTEXPR (sym->etype))
+     {
+@@ -862,9 +863,22 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
    if (ilist && (ilist->type == INIT_DEEP))
      ilist = ilist->init.deep;
  
@@ -68,7 +70,7 @@ index b0c3bee52..4232d9540 100644
          {
            int i, size = getSize (type), le = port->little_endian, top = (options.model == MODEL_FLAT24) ? 3 : 2;;
            dbuf_tprintf (oBuf, "\t!db ");
-@@ -874,6 +888,9 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+@@ -880,6 +894,9 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
                    dbuf_printf (oBuf, "(%s >> %d)", val->name, i * 8);
                  else
                    dbuf_printf (oBuf, "#0x00");
@@ -78,7 +80,7 @@ index b0c3bee52..4232d9540 100644
                else
                  dbuf_printf (oBuf, "#0x00");
                if (i == (le ? (size - 1) : 0))
-@@ -881,6 +898,19 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
+@@ -887,6 +904,19 @@ printIvalType (symbol * sym, sym_link * type, initList * ilist, struct dbuf_s *o
                else
                  dbuf_printf (oBuf, ", ");
              }
@@ -98,8 +100,8 @@ index b0c3bee52..4232d9540 100644
            return;
          }
        else
-@@ -1002,7 +1032,8 @@ printIvalBitFields (symbol ** sym, initList ** ilist, struct dbuf_s *oBuf)
-           /* not an unnamed bit-field structure member */
+@@ -1013,7 +1043,8 @@ printIvalBitFields (symbol *root, symbol ** sym, initList ** ilist, struct dbuf_
+             }
            value *val = list2val (lilist, true);
  
 -          if (val && val->etype && SPEC_SCLS (val->etype) != S_LITERAL)

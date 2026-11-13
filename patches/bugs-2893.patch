@@ -25,10 +25,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-2893.c
 
 diff --git a/src/SDCC.y b/src/SDCC.y
-index 95b6cc650..b91962c44 100644
+index 513f8b48f..db7649fc9 100644
 --- a/src/SDCC.y
 +++ b/src/SDCC.y
-@@ -2708,7 +2708,9 @@ function_body
+@@ -2707,7 +2707,9 @@ function_body
  file
     : /* empty */
       {

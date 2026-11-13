@@ -34,10 +34,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/strlit-ptr-init.c
 
 diff --git a/src/SDCCglue.c b/src/SDCCglue.c
-index 0af7df227..b0c3bee52 100644
+index 40749e638..27e9e0c56 100644
 --- a/src/SDCCglue.c
 +++ b/src/SDCCglue.c
-@@ -1838,8 +1838,10 @@ printIvalPtr (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oBuf)
+@@ -1849,8 +1849,10 @@ printIvalPtr (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oBuf)
    if (!(val = initPointer (ilist, type, 1)))
      return;
  
