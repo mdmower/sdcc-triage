@@ -1,0 +1,828 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 18 Nov 2026 12:10:52 -0800
+Subject: [PATCH] [feature-requests #1038] Compile a case range as one case
+ with two bounds
+
+createCaseRange() made one case and one label for each value of a case
+range. When the cases of a switch statement have more values than a
+jump table of the port can have, geniCodeSwitch() emits one comparison
+for each case, and the time of the passes that follow grows with about
+the third power of the number of comparisons. For mcs51, a range of
+1024 values compiled in 18 seconds and a range of 2048 values in 135
+seconds.
+
+createCaseRange() now makes one case with one label, for the first
+value of the range. The last value follows the first in the list of
+switch values and has the new flag caseRangeEnd of struct value.
+createCase() reports a duplicate case for a value inside a range.
+
+geniCodeSwitch() emits two comparisons for a range. The new function
+geniCodeCaseRange() omits the comparison with the first value when the
+cases before the range have all lower values of the type of the
+condition, and the comparison with a last value that is the highest
+value of that type. geniCodeJumpTable() puts the label of a range into
+the jump table once for each value. A range counts as two cases when
+geniCodeJumpTable() compares the size of a jump table with the size of
+the comparisons. For the test of --nosidechannels, which selects a jump
+table for more than two cases, each value of a range counts as a case.
+
+The change removes two faults of the loop in createCaseRange(). The
+loop did not end for a range whose last value is INT_MAX. For a case
+range that labels a statement outside a statement list, as in
+
+    switch (n)
+      case 2 ... 4:
+        r = 1;
+
+the grammar action of labeled_statement attached the statement to the
+label of the last value and dropped the labels of the other values, and
+the compiler stopped with a segmentation fault.
+
+- A range such as case -3 ... 300 for an unsigned int, whose first
+  value is above its last value after the conversion to the type of the
+  condition, matches no value, as it did with a jump table. With
+  comparisons it matched 0 to 300 and 65533 to 65535.
+- copyValue() copies caseRangeEnd, which the copy of a switch statement
+  in an inline function needs.
+- ast_print() prints a range as one CASE line.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                                 |  41 ++-
+ src/SDCCast.h                                 |   4 +-
+ src/SDCCicode.c                               | 100 ++++++-
+ src/SDCCval.c                                 |   1 +
+ src/SDCCval.h                                 |   2 +
+ support/regression/tests/caseranges.c         |  29 ++
+ .../regression/tests/feature-request-1038.c   | 278 ++++++++++++++++++
+ support/valdiag/tests/feature-request-1038.c  | 147 +++++++++
+ 8 files changed, 580 insertions(+), 22 deletions(-)
+ create mode 100644 support/regression/tests/feature-request-1038.c
+ create mode 100644 support/valdiag/tests/feature-request-1038.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 0ca8a6dab..1be45af68 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -7381,7 +7381,9 @@ createCase (ast * swStat, ast * caseVal, ast * stmnt)
+         {
+           pval->next = caseVal->opval.val;
+         }
+-      else if ((int) ulFromVal (val) == cVal)
++      /* the same value, or the end of a case */
++      /* range that has the current value     */
++      else if ((int) ulFromVal (val) == cVal || val->caseRangeEnd)
+         {
+           werrorfl (caseVal->filename, caseVal->lineno, E_DUPLICATE_LABEL, "case");
+           return NULL;
+@@ -7419,8 +7421,8 @@ createCase (ast * swStat, ast * caseVal, ast * stmnt)
+ ast *
+ createCaseRange (ast * swStat, ast * caseValLow, ast * caseValHigh, ast * stmnt)
+ {
+-  int cVal;
+-  ast *rexpr = stmnt;
++  value *lowVal, *highVal;
++  ast *rexpr;
+ 
+   caseValLow = decorateType (resolveSymbols (caseValLow), RESULT_TYPE_NONE, true);
+   caseValHigh = decorateType (resolveSymbols (caseValHigh), RESULT_TYPE_NONE, true);
+@@ -7456,13 +7458,25 @@ createCaseRange (ast * swStat, ast * caseValLow, ast * caseValHigh, ast * stmnt)
+       return NULL;
+     }
+ 
+-  for (cVal = cValLow; cVal <= cValHigh; cVal++)
++  /* the range is a case for its first value, which has the */
++  /* label, and its last value follows in the switch values */
++  lowVal = valueFromLit (cValLow);
++  rexpr = createCase (swStat, newAst_VALUE (lowVal), stmnt);
++  if (!rexpr || cValLow == cValHigh)
++    return rexpr;
++
++  /* no other case may have a value of the range */
++  if (lowVal->next && (int) ulFromVal (lowVal->next) <= cValHigh)
+     {
+-      rexpr = createCase (swStat, newAst_VALUE (valueFromLit (cVal)), rexpr);
+-      if (!rexpr)
+-        return NULL;
++      werrorfl (caseValHigh->filename, caseValHigh->lineno, E_DUPLICATE_LABEL, "case");
++      return NULL;
+     }
+ 
++  highVal = valueFromLit (cValHigh);
++  highVal->caseRangeEnd = 1;
++  highVal->next = lowVal->next;
++  lowVal->next = highVal;
++
+   return rexpr;
+ }
+ 
+@@ -9429,11 +9443,18 @@ ast_print (ast * tree, FILE * outfile, int indent)
+         ast_print (tree->left, outfile, 0);
+         for (val = tree->values.switchVals.swVals; val; val = val->next)
+           {
++            int caseVal = (int) ulFromVal (val);
++
+             INDENT (indent + 2, outfile);
+-            fprintf (outfile, "CASE 0x%x GOTO _case_%d_%d%s\n",
+-                     (int) ulFromVal (val),
++            fprintf (outfile, "CASE 0x%x ", caseVal);
++            if (val->next && val->next->caseRangeEnd)
++              {
++                val = val->next;
++                fprintf (outfile, "... 0x%x ", (int) ulFromVal (val));
++              }
++            fprintf (outfile, "GOTO _case_%d_%d%s\n",
+                      tree->values.switchVals.swNum,
+-                     (int) ulFromVal (val), tree->values.switchVals.swSuffix ? tree->values.switchVals.swSuffix : "");
++                     caseVal, tree->values.switchVals.swSuffix ? tree->values.switchVals.swSuffix : "");
+           }
+         ast_print (tree->right, outfile, indent);
+       }
+diff --git a/src/SDCCast.h b/src/SDCCast.h
+index 87dd79b9a..9115eac47 100644
+--- a/src/SDCCast.h
++++ b/src/SDCCast.h
+@@ -82,7 +82,9 @@ typedef struct ast
+     /* if switch then switch values */
+     struct
+     {
+-      value *swVals;            /* switch comparison values */
++      value *swVals;            /* switch comparison values; a case range */
++                                /* is its first value and its last, which */
++                                /* has caseRangeEnd set                   */
+       int swDefault;            /* default if present       */
+       int swNum;                /* switch number            */
+       char *swSuffix;
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index f8fe615dc..db062ff3e 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -4285,7 +4285,7 @@ geniCodeJumpTable (operand * cond, value * caseVals, ast * tree)
+   int i, t;
+   value *vch, *maxVal;
+   iCode *ic;
+-  symbol *falseLabel;
++  symbol *falseLabel, *caseLabel;
+   set *labels = NULL;
+   sym_link *cetype = getSpec (operandType (cond));
+   int sizeofMinCost, sizeofZeroMinCost, sizeofMaxCost;
+@@ -4302,6 +4302,8 @@ geniCodeJumpTable (operand * cond, value * caseVals, ast * tree)
+   /* If not all integer numbers are present the algorithm */
+   /* inserts jumps to the default label for the missing numbers */
+   /* and decides later whether it is worth it */
++  /* A case range has two values in the list, so that it counts */
++  /* as the two comparisons that it takes without a jump table. */
+   min = (int) ulFromVal (vch = caseVals);
+ 
+   while (vch->next)
+@@ -4372,8 +4374,17 @@ geniCodeJumpTable (operand * cond, value * caseVals, ast * tree)
+ 
+   // The match & jump sequence results in the instruction sequence being executed depending far more on the condition value,
+   // and thus introduces worse timing and energy side channels, and they get worse the more cases there are.
+-  if (cnt > 2 && optimize.nosidechannels)
+-    sizeofMatchJump = INT_MAX;
++  // For this, each value of a case range counts as a case.
++  if (optimize.nosidechannels)
++    {
++      int values = cnt;
++
++      for (vch = caseVals; vch->next; vch = vch->next)
++        if (vch->next->caseRangeEnd)
++          values += (int) ulFromVal (vch->next) - (int) ulFromVal (vch) - 1;
++      if (values > 2)
++        sizeofMatchJump = INT_MAX;
++    }
+ 
+   /* If the size cost of the jump table is uneconomical then exit */
+   if (sizeofMatchJump < sizeofJumpTable)
+@@ -4407,9 +4418,17 @@ geniCodeJumpTable (operand * cond, value * caseVals, ast * tree)
+           /* Explicit case: make a new label for it. */
+           dbuf_printf (&dbuf, "_case_%d_%d%s", tree->values.switchVals.swNum, i,
+                        tree->values.switchVals.swSuffix ? tree->values.switchVals.swSuffix : "");
+-          addSet (&labels, newiTempLabel (dbuf_c_str (&dbuf)));
++          caseLabel = newiTempLabel (dbuf_c_str (&dbuf));
++          addSet (&labels, caseLabel);
+           dbuf_destroy (&dbuf);
+           vch = vch->next;
++          /* A case range: the same label for its other values. */
++          if (vch && vch->caseRangeEnd)
++            {
++              for (t = (int) ulFromVal (vch); i < t; i++)
++                addSet (&labels, caseLabel);
++              vch = vch->next;
++            }
+           if (vch)
+             t = (int) ulFromVal (vch);
+         }
+@@ -4463,6 +4482,40 @@ geniCodeJumpTable (operand * cond, value * caseVals, ast * tree)
+   return 1;
+ }
+ 
++/*-----------------------------------------------------------------*/
++/* geniCodeCaseRange - jumps to the label of a case range if the   */
++/*                     switch condition has one of its values      */
++/*-----------------------------------------------------------------*/
++static void
++geniCodeCaseRange (operand * cond, value * low, value * high, symbol * caseLabel, bool noneBelow)
++{
++  iCode *ic;
++  sym_link *ctype = operandType (cond);
++  symbol *nextLabel = newiTempLabel (NULL);
++
++  /* There is nothing to compare with the first value if the condition */
++  /* cannot be below it here, and nothing to compare with a last value */
++  /* that is the highest of the type of the condition. A value that    */
++  /* the type cannot have is compared, because a case with such a      */
++  /* value has a warning.                                              */
++  if (!noneBelow || checkConstantRange (ctype, low->etype, EQ_OP, false) == CCR_ALWAYS_FALSE)
++    {
++      ic = newiCodeCondition (geniCodeLogic (cond, operandFromValue (low, true), '<', NULL), nextLabel, NULL);
++      ADDTOCHAIN (ic);
++    }
++
++  if (checkConstantRange (ctype, high->etype, '>', false) != CCR_ALWAYS_FALSE ||
++      checkConstantRange (ctype, high->etype, EQ_OP, false) == CCR_ALWAYS_FALSE)
++    {
++      ic = newiCodeCondition (geniCodeLogic (cond, operandFromValue (high, true), '>', NULL), NULL, caseLabel);
++      ADDTOCHAIN (ic);
++    }
++  else
++    geniCodeGoto (caseLabel);
++
++  geniCodeLabel (nextLabel);
++}
++
+ /*-----------------------------------------------------------------*/
+ /* geniCodeSwitch - changes a switch to a if statement             */
+ /*-----------------------------------------------------------------*/
+@@ -4474,18 +4527,25 @@ geniCodeSwitch (ast * tree, int lvl)
+   value *caseVals = tree->values.switchVals.swVals;
+   symbol *trueLabel, *falseLabel;
+   struct dbuf_s dbuf;
++  bool noneBelow = false;
+ 
+   /* If the condition is a literal, then just jump to the */
+   /* appropriate case label. */
+   if (IS_LITERAL (getSpec (operandType (cond))))
+     {
+-      int switchVal, caseVal;
++      int switchVal, caseVal, caseValHigh;
+ 
+       switchVal = (int) ulFromVal (OP_VALUE (cond));
+       while (caseVals)
+         {
+-          caseVal = (int) ulFromVal (caseVals);
+-          if (caseVal == switchVal)
++          caseVal = caseValHigh = (int) ulFromVal (caseVals);
++          /* a case range has the label of its first value */
++          if (caseVals->next && caseVals->next->caseRangeEnd)
++            {
++              caseVals = caseVals->next;
++              caseValHigh = (int) ulFromVal (caseVals);
++            }
++          if (caseVal <= switchVal && switchVal <= caseValHigh)
+             {
+               struct dbuf_s dbuf;
+ 
+@@ -4525,16 +4585,34 @@ geniCodeSwitch (ast * tree, int lvl)
+   /* for the cases defined do */
+   while (caseVals)
+     {
+-      operand *compare = geniCodeLogic (cond, operandFromValue (caseVals, true), EQ_OP, NULL);
+-
+       dbuf_init (&dbuf, 128);
+       dbuf_printf (&dbuf, "_case_%d_%d%s", tree->values.switchVals.swNum, (int) ulFromVal (caseVals),
+                    tree->values.switchVals.swSuffix ? tree->values.switchVals.swSuffix : "");
+       trueLabel = newiTempLabel (dbuf_c_str (&dbuf));
+       dbuf_destroy (&dbuf);
+ 
+-      ic = newiCodeCondition (compare, trueLabel, NULL);
+-      ADDTOCHAIN (ic);
++      /* The condition cannot be below this case here if the case has */
++      /* the lowest value of the type, or if the cases before it have */
++      /* all the values below it.                                     */
++      if (checkConstantRange (operandType (cond), caseVals->etype, '<', false) == CCR_ALWAYS_FALSE)
++        noneBelow = true;
++
++      /* a case range takes two comparisons, however many values it has */
++      if (caseVals->next && caseVals->next->caseRangeEnd)
++        {
++          geniCodeCaseRange (cond, caseVals, caseVals->next, trueLabel, noneBelow);
++          caseVals = caseVals->next;
++        }
++      else
++        {
++          operand *compare = geniCodeLogic (cond, operandFromValue (caseVals, true), EQ_OP, NULL);
++
++          ic = newiCodeCondition (compare, trueLabel, NULL);
++          ADDTOCHAIN (ic);
++        }
++
++      if (caseVals->next && (int) ulFromVal (caseVals->next) != (int) ulFromVal (caseVals) + 1)
++        noneBelow = false;
+       caseVals = caseVals->next;
+     }
+ 
+diff --git a/src/SDCCval.c b/src/SDCCval.c
+index ec7f898ef..32957539c 100644
+--- a/src/SDCCval.c
++++ b/src/SDCCval.c
+@@ -2155,6 +2155,7 @@ copyValue (value * src)
+   strncpyz (dest->name, src->name, SDCC_NAME_MAX);
+   dest->type = (src->type ? copyLinkChain (src->type) : NULL);
+   dest->etype = (src->type ? getSpec (dest->type) : NULL);
++  dest->caseRangeEnd = src->caseRangeEnd;
+ 
+   return dest;
+ }
+diff --git a/src/SDCCval.h b/src/SDCCval.h
+index c9094fda1..069238759 100644
+--- a/src/SDCCval.h
++++ b/src/SDCCval.h
+@@ -35,6 +35,8 @@ typedef struct value
+   symbol *sym;                  /* Original Symbol                  */
+   struct value *next;           /* used in initializer list         */
+   unsigned vArgs:1;             /* arg list ended with variable arg */
++  unsigned caseRangeEnd:1;      /* last value of a case range; its  */
++                                /* first value is the one before    */
+ }
+ value;
+ 
+diff --git a/support/regression/tests/caseranges.c b/support/regression/tests/caseranges.c
+index 401a52c15..cafdf59ab 100644
+--- a/support/regression/tests/caseranges.c
++++ b/support/regression/tests/caseranges.c
+@@ -45,6 +45,35 @@ testCaseRanges (void)
+     }
+   }
+ }
++
++// A case range that labels a statement which is not in a statement list
++void
++testCaseRangeStatement (void)
++{
++  for (int n = 0; n <= 7; n++)
++  {
++    int r = 0;
++
++    switch (n)
++      case 2 ... 4:
++        r = 1;
++    ASSERT (r == (n >= 2 && n <= 4));
++
++    r = 0;
++    switch (n)
++    {
++      case 0:
++        r = 2;
++        if (r)
++      case 5 ... 6:
++          r++;
++        break;
++      default:
++        r = 9;
++    }
++    ASSERT (r == (n == 0 ? 3 : n == 5 || n == 6 ? 1 : 9));
++  }
++}
+ #endif
+ 
+ #ifdef __SDCC
+diff --git a/support/regression/tests/feature-request-1038.c b/support/regression/tests/feature-request-1038.c
+new file mode 100644
+index 000000000..c2b39034a
+--- /dev/null
++++ b/support/regression/tests/feature-request-1038.c
+@@ -0,0 +1,278 @@
++/** Case ranges with many values (RFE #1038)
++ */
++
++#include <testfwk.h>
++
++#ifdef __SDCC
++_Pragma("save")
++// case range expressions are a C2y feature
++_Pragma("std_c2y")
++#endif
++
++// case range expressions were originally a GNU extension => test GNU-like host compilers, too
++#if defined(__SDCC) || defined(__GNUC__)
++
++/* More values than a jump table can have for some targets. Single cases are
++   next to both ends of the wide range. The first range starts at the lowest
++   value of the type and, where int has 16 bits, the last range ends at the
++   highest. */
++static unsigned char
++classifyUnsigned (unsigned int v)
++{
++  switch (v)
++    {
++    case 0x0000 ... 0x000f:
++      return 1;
++    case 0x00ff:
++      return 2;
++    case 0x0100 ... 0x03ff:
++      return 3;
++    case 0x0400:
++      return 4;
++    case 0xfff0 ... 0xffff:
++      return 5;
++    default:
++      return 0;
++    }
++}
++
++static unsigned char
++classifySigned (int v)
++{
++  switch (v)
++    {
++    case -32767 - 1 ... -32760:
++      return 1;
++    case -600 ... -101:
++      return 2;
++    case -100:
++      return 3;
++    case -1 ... 1:
++      return 4;
++    case 100 ... 399:
++      return 5;
++    case 32760 ... 32767:
++      return 6;
++    default:
++      return 0;
++    }
++}
++
++/* The cases have all values of the type but 11 to 99 and 201 to 249. */
++static unsigned char
++classifyChar (unsigned char v)
++{
++  switch (v)
++    {
++    case 0 ... 9:
++      return 1;
++    case 10:
++      return 2;
++    case 100 ... 199:
++      return 3;
++    case 200:
++      return 4;
++    case 250 ... 255:
++      return 5;
++    default:
++      return 0;
++    }
++}
++
++static unsigned char
++classifyLong (long v)
++{
++  switch (v)
++    {
++    case -70000 ... -69997:
++      return 1;
++    case -2 ... 2:
++      return 2;
++    case 0x10000 ... 0x10007:
++      return 3;
++    case 0x10008:
++      return 4;
++    default:
++      return 0;
++    }
++}
++
++/* Few values and most of them are cases, which makes a jump table likely. */
++static unsigned char
++classifyDense (unsigned char v)
++{
++  switch (v)
++    {
++    case 0:
++      return 10;
++    case 1 ... 3:
++      return 11;
++    case 4:
++      return 12;
++    case 5:
++      return 13;
++    case 6 ... 9:
++      return 14;
++    case 10:
++      return 15;
++    case 11 ... 15:
++      return 16;
++    default:
++      return 0;
++    }
++}
++
++static inline unsigned char
++inRange (unsigned int v)
++{
++  switch (v)
++    {
++    case 300 ... 339:
++      return 1;
++    default:
++      return 0;
++    }
++}
++
++/* The switch statement is copied to the caller. */
++static unsigned char
++callInline (unsigned int v)
++{
++  return inRange (v);
++}
++
++static unsigned char
++classifyConstant (void)
++{
++  switch (0x03ff)
++    {
++    case 0x00ff:
++      return 1;
++    case 0x0100 ... 0x03ff:
++      return 2;
++    default:
++      return 0;
++    }
++}
++
++void
++testUnsigned (void)
++{
++  ASSERT (classifyUnsigned (0x0000) == 1);
++  ASSERT (classifyUnsigned (0x000f) == 1);
++  ASSERT (classifyUnsigned (0x0010) == 0);
++  ASSERT (classifyUnsigned (0x00fe) == 0);
++  ASSERT (classifyUnsigned (0x00ff) == 2);
++  ASSERT (classifyUnsigned (0x0100) == 3);
++  ASSERT (classifyUnsigned (0x0101) == 3);
++  ASSERT (classifyUnsigned (0x01ff) == 3);
++  ASSERT (classifyUnsigned (0x0200) == 3);
++  ASSERT (classifyUnsigned (0x03fe) == 3);
++  ASSERT (classifyUnsigned (0x03ff) == 3);
++  ASSERT (classifyUnsigned (0x0400) == 4);
++  ASSERT (classifyUnsigned (0x0401) == 0);
++  ASSERT (classifyUnsigned (0x8100) == 0);
++  ASSERT (classifyUnsigned (0xffef) == 0);
++  ASSERT (classifyUnsigned (0xfff0) == 5);
++  ASSERT (classifyUnsigned (0xffff) == 5);
++}
++
++void
++testSigned (void)
++{
++  ASSERT (classifySigned (-32767 - 1) == 1);
++  ASSERT (classifySigned (-32760) == 1);
++  ASSERT (classifySigned (-32759) == 0);
++  ASSERT (classifySigned (-601) == 0);
++  ASSERT (classifySigned (-600) == 2);
++  ASSERT (classifySigned (-257) == 2);
++  ASSERT (classifySigned (-256) == 2);
++  ASSERT (classifySigned (-101) == 2);
++  ASSERT (classifySigned (-100) == 3);
++  ASSERT (classifySigned (-99) == 0);
++  ASSERT (classifySigned (-2) == 0);
++  ASSERT (classifySigned (-1) == 4);
++  ASSERT (classifySigned (0) == 4);
++  ASSERT (classifySigned (1) == 4);
++  ASSERT (classifySigned (2) == 0);
++  ASSERT (classifySigned (99) == 0);
++  ASSERT (classifySigned (100) == 5);
++  ASSERT (classifySigned (255) == 5);
++  ASSERT (classifySigned (256) == 5);
++  ASSERT (classifySigned (399) == 5);
++  ASSERT (classifySigned (400) == 0);
++  ASSERT (classifySigned (32759) == 0);
++  ASSERT (classifySigned (32760) == 6);
++  ASSERT (classifySigned (32767) == 6);
++}
++
++void
++testChar (void)
++{
++  ASSERT (classifyChar (0) == 1);
++  ASSERT (classifyChar (9) == 1);
++  ASSERT (classifyChar (10) == 2);
++  ASSERT (classifyChar (11) == 0);
++  ASSERT (classifyChar (99) == 0);
++  ASSERT (classifyChar (100) == 3);
++  ASSERT (classifyChar (199) == 3);
++  ASSERT (classifyChar (200) == 4);
++  ASSERT (classifyChar (201) == 0);
++  ASSERT (classifyChar (249) == 0);
++  ASSERT (classifyChar (250) == 5);
++  ASSERT (classifyChar (255) == 5);
++}
++
++void
++testLong (void)
++{
++  ASSERT (classifyLong (-70001) == 0);
++  ASSERT (classifyLong (-70000) == 1);
++  ASSERT (classifyLong (-69997) == 1);
++  ASSERT (classifyLong (-69996) == 0);
++  ASSERT (classifyLong (-65536) == 0);
++  ASSERT (classifyLong (-3) == 0);
++  ASSERT (classifyLong (-2) == 2);
++  ASSERT (classifyLong (0) == 2);
++  ASSERT (classifyLong (2) == 2);
++  ASSERT (classifyLong (3) == 0);
++  ASSERT (classifyLong (0x0ffff) == 0);
++  ASSERT (classifyLong (0x10000) == 3);
++  ASSERT (classifyLong (0x10007) == 3);
++  ASSERT (classifyLong (0x10008) == 4);
++  ASSERT (classifyLong (0x10009) == 0);
++  ASSERT (classifyLong (0x20000) == 0);
++  ASSERT (classifyLong (0x7fffffff) == 0);
++}
++
++void
++testDense (void)
++{
++  static const unsigned char expected[] =
++    {10, 11, 11, 11, 12, 13, 14, 14, 14, 14, 15, 16, 16, 16, 16, 16, 0, 0};
++  unsigned char i;
++
++  for (i = 0; i < sizeof (expected); i++)
++    ASSERT (classifyDense (i) == expected[i]);
++  ASSERT (classifyDense (255) == 0);
++}
++
++void
++testInline (void)
++{
++  ASSERT (callInline (299) == 0);
++  ASSERT (callInline (300) == 1);
++  ASSERT (callInline (339) == 1);
++  ASSERT (callInline (340) == 0);
++}
++
++void
++testConstant (void)
++{
++  ASSERT (classifyConstant () == 2);
++}
++#endif
++
++#ifdef __SDCC
++_Pragma("restore")
++#endif
+diff --git a/support/valdiag/tests/feature-request-1038.c b/support/valdiag/tests/feature-request-1038.c
+new file mode 100644
+index 000000000..1592f9ceb
+--- /dev/null
++++ b/support/valdiag/tests/feature-request-1038.c
+@@ -0,0 +1,147 @@
++/* feature-request-1038.c
++
++   The compiler keeps a case range as one entry of a switch statement. The
++   values of the range must not be values of other cases.
++ */
++
++int x;
++
++#ifdef __SDCC
++#pragma std_c2y
++#elif defined(__GNUC__)
++/* GCC implements case ranges as an extension. */
++#pragma GCC diagnostic ignored "-Wpedantic"
++#endif
++
++#ifdef TEST1
++/* A case inside an earlier range. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 100 ... 150:         /* IGNORE */
++        return 1;
++      case 149:                 /* ERROR */
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST2
++/* The last value of an earlier range. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 100 ... 150:         /* IGNORE */
++        return 1;
++      case 150:                 /* ERROR */
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST3
++/* A range that starts inside an earlier range. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 100 ... 150:         /* IGNORE */
++        return 1;
++      case 150 ... 160:         /* ERROR */
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST4
++/* A range that starts below an earlier case and has its value. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 150:                 /* IGNORE */
++        return 1;
++      case 100 ... 150:         /* ERROR */
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST5
++/* A range that has all values of an earlier range. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 120 ... 130:         /* IGNORE */
++        return 1;
++      case 100 ... 150:         /* ERROR */
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST6
++/* Ranges and cases next to each other, in any order, are valid. */
++char foo (void)
++{
++  switch (x)
++    {
++      case 151:
++        return 1;
++      case 100 ... 150:
++        return 2;
++      case 99:
++        return 3;
++      case -20 ... 98:
++        return 4;
++      case 152 ... 160:
++        return 5;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST7
++/* Ranges that start at the lowest value or end at the highest value of the
++   type of the controlling expression do not get a warning. */
++char foo (unsigned char c)
++{
++  switch (c)
++    {
++      case 0 ... 99:
++        return 1;
++      case 200 ... 255:
++        return 2;
++      default:
++        return 0;
++    }
++}
++#endif
++
++#ifdef TEST8
++/* A value of the range that the type cannot have. */
++char foo (unsigned char c)
++{
++  switch (c)                    /* WARNING(SDCC) */
++    {
++      case 200 ... 256:         /* IGNORE(GCC) */
++        return 1;
++      default:
++        return 0;
++    }
++}
++#endif
