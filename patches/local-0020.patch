@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 18 Nov 2026 00:34:06 -0800
+Subject: [PATCH] [local #0020] mcs51: name the external stack pointer spx in
+ the library sources
+
+r17225 changed the name of the external stack pointer from _spx to spx
+in the code that the mcs51 port emits. It replaced _spx.c with spx.s,
+which defines spx. crtxstack.s, crtxpush.s, and crtxpop.s in
+device/lib/mcs51-common and setjmp.c in
+device/lib/mcs51-small-xstack-auto still named _spx. crtxstack.s has
+the startup code that each program with --xstack refers to, so each
+such program linked with "Undefined Global _spx", and sdcc exited with
+status 1. The linker wrote 0 for the address. The startup code then
+stored the start of the external stack in r0 of register bank 0, and
+sdcc_xpush_regs and sdcc_xpop_regs read that byte as the stack pointer.
+
+The four files now name spx. The change also puts the name in the
+branch for __SDCC_USE_XSTACK of device/lib/mcs51-medium/_mullong.s,
+which the library makefiles do not assemble, and in the listings of
+the startup code in the manual.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ device/lib/mcs51-common/crtxpop.s           | 4 ++--
+ device/lib/mcs51-common/crtxpush.s          | 4 ++--
+ device/lib/mcs51-common/crtxstack.s         | 6 +++---
+ device/lib/mcs51-medium/_mullong.s          | 2 +-
+ device/lib/mcs51-small-xstack-auto/setjmp.c | 6 +++---
+ doc/sdccman.lyx                             | 6 +++---
+ 6 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/device/lib/mcs51-common/crtxpop.s b/device/lib/mcs51-common/crtxpop.s
+index 9aaa5bbc8..43a4da9d4 100644
+--- a/device/lib/mcs51-common/crtxpop.s
++++ b/device/lib/mcs51-common/crtxpop.s
+@@ -40,7 +40,7 @@ bits:
+ sdcc_xpop_regs::
+ 	push	acc		;save mask in high nibble of acc
+ 	mov	a,r0
+-	mov	r0,_spx
++	mov	r0,spx
+ 	jbc	B.0,00100$	;if B(0)=0 then
+ 	dec	r0
+ 	movx	a,@r0		;pop R0
+@@ -99,7 +99,7 @@ sdcc_xpop_regs::
+ 	movx	a,@r0		;pop dph
+ 	mov	dph,a
+ 00110$:
+-	mov	_spx,r0
++	mov	spx,r0
+ 	pop	acc
+ 	mov	r0,a
+ 	ret
+diff --git a/device/lib/mcs51-common/crtxpush.s b/device/lib/mcs51-common/crtxpush.s
+index 13da50b6e..d9807c87a 100644
+--- a/device/lib/mcs51-common/crtxpush.s
++++ b/device/lib/mcs51-common/crtxpush.s
+@@ -40,8 +40,8 @@ bits:
+ sdcc_xpush_regs::
+ 	push	acc		;save mask in high nibble of acc
+ 	anl	a,#0x0F		;take size from low nibble of acc
+-	add	a,_spx
+-	mov	_spx,a		;allocate space
++	add	a,spx
++	mov	spx,a		;allocate space
+ 	xch	a,r0
+ 	push	acc		;save R0 for return
+ 	jbc	B.0,00100$	;if B(0)=0 then
+diff --git a/device/lib/mcs51-common/crtxstack.s b/device/lib/mcs51-common/crtxstack.s
+index 125daed8b..58709c1d3 100644
+--- a/device/lib/mcs51-common/crtxstack.s
++++ b/device/lib/mcs51-common/crtxstack.s
+@@ -47,12 +47,12 @@ __sdcc_init_xstack::
+ ; uses the xstack.
+ 	
+ 	mov	__XPAGE,#(__start__xstack >> 8)
+-	mov	_spx,#__start__xstack
++	mov	spx,#__start__xstack
+ 
+ 	.area GSINIT5 (CODE)
+ 
+ ; Need to initialize in GSINIT5 because __mcs51_genXINIT modifies __XPAGE
+-; and __mcs51_genRAMCLEAR modifies _spx.
++; and __mcs51_genRAMCLEAR modifies spx.
+ 	
+ 	mov	__XPAGE,#(__start__xstack >> 8)
+-	mov	_spx,#__start__xstack
++	mov	spx,#__start__xstack
+diff --git a/device/lib/mcs51-medium/_mullong.s b/device/lib/mcs51-medium/_mullong.s
+index dfb632b49..fff8e80ce 100644
+--- a/device/lib/mcs51-medium/_mullong.s
++++ b/device/lib/mcs51-medium/_mullong.s
+@@ -70,7 +70,7 @@ __mullong:
+ 
+ .ifdef __SDCC_USE_XSTACK
+ 	mov	a,#-4		;  1  b 4 bytes
+-	add	a,_spx		;  1
++	add	a,spx		;  1
+ 	mov	r0,a		;  1  r0 points to b0
+ .else
+ ;if defined (__SDCC_MODEL_MEDIUM)
+diff --git a/device/lib/mcs51-small-xstack-auto/setjmp.c b/device/lib/mcs51-small-xstack-auto/setjmp.c
+index fd8373655..3ef88a1ad 100644
+--- a/device/lib/mcs51-small-xstack-auto/setjmp.c
++++ b/device/lib/mcs51-small-xstack-auto/setjmp.c
+@@ -62,7 +62,7 @@ ___setjmp:
+ ;../../device/lib/_setjmp.c:184:*buf++ = spx;
+ ;     genPointerSet
+ ;     genGenPointerSet
+-	mov	a,_spx
++	mov	a,spx
+ 	lcall	__gptrput
+ 	inc	dptr
+ ;../../device/lib/_setjmp.c:185:*buf++ = bp;
+@@ -133,7 +133,7 @@ ___setjmp:
+ 	.globl _longjmp
+ _longjmp:
+ ;     genReceive
+-	mov	r0,_spx
++	mov	r0,spx
+ 	dec	r0
+ 	movx	a,@r0
+ 	mov	r2,a
+@@ -150,7 +150,7 @@ _longjmp:
+ ;     genPointerGet
+ ;     genGenPointerGet
+ 	lcall	__gptrget
+-	mov	_spx,a
++	mov	spx,a
+ 	inc	dptr
+ ;../../device/lib/_setjmp.c:195:bp = *buf++;
+ ;     genPointerGet
+diff --git a/doc/sdccman.lyx b/doc/sdccman.lyx
+index dd65b9e31..51c8590da 100644
+--- a/doc/sdccman.lyx
++++ b/doc/sdccman.lyx
+@@ -45848,7 +45848,7 @@ mov __XPAGE,#(__start__xstack >> 8)
+ \begin_inset space ~
+ \end_inset
+ 
+-mov _spx,#__start__xstack
++mov spx,#__start__xstack
+ \end_layout
+ 
+ \begin_layout Verse
+@@ -47673,7 +47673,7 @@ djnz r1,00007$
+ \end_inset
+ 
+ ;
+- and __mcs51_genRAMCLEAR modifies _spx.
++ and __mcs51_genRAMCLEAR modifies spx.
+ \begin_inset Newline newline
+ \end_inset
+ 
+@@ -47745,7 +47745,7 @@ mov __XPAGE,#(__start__xstack >> 8)
+ \begin_inset space ~
+ \end_inset
+ 
+-mov _spx,#__start__xstack
++mov spx,#__start__xstack
+ \end_layout
+ 
+ \begin_layout Verse

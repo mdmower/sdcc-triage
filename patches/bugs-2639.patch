@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 18 Nov 2026 04:33:33 -0800
+Subject: [PATCH] [bugs #2639] Do not convert an argument whose expression has
+ an error
+
+decorateType() turns the tree of an expression with an error into a
+NULLOP node of type char and sets isError. processParms() did not test
+the flag after it decorated an argument. When the type char needed a
+conversion to the type of the parameter, processParms() cast a copy of
+the tree and decorated the cast. copyAst() does not copy isError, so
+decorateType() decorated both children of the copy. The right child of
+a call with two or more arguments is a PARAM node, and decorateType()
+reported an internal error for it (node PARAM shouldn't be processed
+here). A call with too many or too few arguments that is an argument of
+another call gave the internal error after its own error:
+
+    extern void g (int a);
+    extern int h (void);
+
+    g (h (1, 2));
+
+processParms() now returns 1 for arguments whose tree has isError. The
+outer call becomes an error tree, as it does for the other errors of
+processParms().
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                    |  5 +++
+ support/valdiag/tests/bug-2639.c | 64 ++++++++++++++++++++++++++++++++
+ 2 files changed, 69 insertions(+)
+ create mode 100644 support/valdiag/tests/bug-2639.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index 5ab00a6f4..0ca8a6dab 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -1029,6 +1029,11 @@ processParms (ast * func, value * defParm, ast ** actParm, int *parmNumber,
+   resultType = defParm ? getResultTypeFromType (defParm->type) : RESULT_TYPE_NONE;
+   *actParm = decorateType (*actParm, resultType, true);
+ 
++  /* decorateType() reported the error of this parameter. The cast below
++     is made from a copy of the tree, and copyAst() does not copy isError. */
++  if ((*actParm)->isError)
++    return 1;
++
+   if (IS_VOID ((*actParm)->ftype))
+     {
+       werror (E_VOID_VALUE_USED);
+diff --git a/support/valdiag/tests/bug-2639.c b/support/valdiag/tests/bug-2639.c
+new file mode 100644
+index 000000000..5fcf412a4
+--- /dev/null
++++ b/support/valdiag/tests/bug-2639.c
+@@ -0,0 +1,64 @@
++/* bug-2639.c
++
++   A call with a wrong number of arguments gets an error. That is also the
++   only error when the call is an argument of another call and needs a
++   conversion to the type of its parameter. Each inner call is written on
++   two lines. An internal error for its arguments (node PARAM shouldn't be
++   processed here) has the number of the second line, where a diagnostic is
++   not expected.
++ */
++
++extern void g (unsigned int a);
++extern void g2 (unsigned int a, unsigned int b);
++
++#ifdef TEST1
++/* The function of the inner call is not declared. */
++void f (void)
++{
++  g (u (1, /* ERROR(SDCC) */ /* IGNORE(GCC) */
++        2));
++}
++#endif
++
++#ifdef TEST2
++extern int h (void); /* IGNORE(GCC) */
++
++void f (void)
++{
++  g (h (1, /* ERROR */
++        2));
++}
++#endif
++
++#ifdef TEST3
++extern int h (void); /* IGNORE(GCC) */
++
++/* The inner call is an operand of the argument. */
++void f (void)
++{
++  g (h (1, /* ERROR */
++        2) + 1);
++}
++#endif
++
++#ifdef TEST4
++extern int h (void); /* IGNORE(GCC) */
++
++/* The inner call is the first of two arguments. */
++void f (void)
++{
++  g2 (h (1, /* ERROR */
++         2), 3);
++}
++#endif
++
++#ifdef TEST5
++extern int k (int a, int b, int c); /* IGNORE(GCC) */
++
++/* The inner call has too few arguments. */
++void f (void)
++{
++  g (k (1, /* ERROR */
++        2));
++}
++#endif

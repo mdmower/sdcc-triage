@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 18 Nov 2026 05:09:03 -0800
+Subject: [PATCH] [bugs #4226] Keep the values of numeric escape sequences in
+ wide string literals
+
+strVal() converted the source of a wide string literal to bytes with
+copyStrWithEscapeLimit(), which stored each numeric escape sequence as
+one byte, and then decoded the bytes as UTF-8. Values above 0xff lost
+their high bits, so the first element of
+
+    unsigned int s[] = u"\x100";
+
+was 0. Values from 0x80 to 0xff were decoded as bytes of a multi-byte
+sequence. The element for u"\x80" was 0, the compiler stopped with an
+internal error for U"\xff", and it read past the end of the buffer for
+L"\xe9".
+
+The new function copyStr32() converts the source of a wide string
+literal to 32-bit elements. It stores the value of each numeric escape
+sequence as one element, and it decodes only the characters of the
+source as UTF-8.
+
+utf_16_from_utf_32() now stores every value up to 0xffff as one UTF-16
+code unit. It did not accept the surrogate values, which numeric escape
+sequences can have, and it did not accept 0xd7ff.
+
+utf_32_from_utf_8() now stops at the end of its input when the last
+sequence is incomplete. copyStr32() gives it the characters between two
+escape sequences, and more of the literal follows them.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCutil.c                      | 62 ++++++++++++++++++-
+ src/SDCCutil.h                      |  1 +
+ src/SDCCval.c                       | 10 +--
+ support/regression/tests/bug-4226.c | 96 +++++++++++++++++++++++++++++
+ 4 files changed, 160 insertions(+), 9 deletions(-)
+ create mode 100644 support/regression/tests/bug-4226.c
+
+diff --git a/src/SDCCutil.c b/src/SDCCutil.c
+index 9788f60aa..64a792242 100644
+--- a/src/SDCCutil.c
++++ b/src/SDCCutil.c
+@@ -1149,7 +1149,7 @@ const uint32_t *utf_32_from_utf_8 (size_t *utf_32_len, const char *utf_8, size_t
+       utf_8_len--;
+       seqlen--;
+ 
+-      for(; seqlen; seqlen--)
++      for(; seqlen && utf_8_len; seqlen--)
+         {
+           codepoint <<= 6;
+           codepoint |= (*utf_8 & 0x3f);
+@@ -1179,7 +1179,7 @@ const uint16_t *utf_16_from_utf_32 (size_t *utf_16_len, const uint32_t *utf_32,
+ 
+       codepoint = *utf_32;
+ 
+-      if (codepoint < 0xd7ff || codepoint >= 0xe000 && codepoint <= 0xffff) // Code in basic multilingual plane.
++      if (codepoint <= 0xffff) // Code in basic multilingual plane, or code unit from a numeric escape sequence.
+         {
+           utf_16[(*utf_16_len)++] = codepoint;
+           continue;
+@@ -1324,6 +1324,64 @@ copyStr (const char *src, size_t *size)
+   return copyStrWithEscapeLimit (src, size, 0);
+ }
+ 
++/*!
++  /fn const uint32_t *copyStr32 (const char *src, size_t *size, unsigned long limit)
++
++  Copies the source string of a wide string literal to a dynamically
++  allocated buffer of 32-bit elements. Characters of the source and
++  universal character names are stored as code points. The value of each
++  numeric escape sequence is stored as one element.
++
++  /param src   Buffer containing the source string with escape sequences
++  /param size  Pointer to location where the number of elements, including the terminating zero, is written
++  /param limit Largest value that an element of the literal can have
++  /return Dynamically allocated resulting buffer
++*/
++
++const uint32_t *
++copyStr32 (const char *src, size_t *size, unsigned long limit)
++{
++  struct dbuf_s dbuf;
++  uint32_t element;
++
++  dbuf_init (&dbuf, 128);
++
++  while (*src)
++    {
++      if (*src == '\"')
++        {
++          ++src;
++        }
++      else if (*src == '\\')
++        {
++          ++src;
++          escapeValue escape = parseEscape (&src);
++          unsigned long c = escapeValueInRange (escape, limit);
++
++          if (escape.kind == ESCAPE_UNIVERSAL && c >= 0x110000)
++            werror (W_UNICODE_RANGE);
++          element = c;
++          dbuf_append (&dbuf, &element, sizeof (element));
++        }
++      else
++        {
++          size_t utf_8_len = strcspn (src, "\"\\");
++          size_t utf_32_len;
++          const uint32_t *utf_32 = utf_32_from_utf_8 (&utf_32_len, src, utf_8_len);
++
++          dbuf_append (&dbuf, utf_32, utf_32_len * sizeof (*utf_32));
++          free ((void *)utf_32);
++          src += utf_8_len;
++        }
++    }
++
++  element = 0;
++  dbuf_append (&dbuf, &element, sizeof (element));
++  *size = dbuf_get_length (&dbuf) / sizeof (element);
++
++  return dbuf_detach (&dbuf);
++}
++
+ static char prefix[256] = "";
+ static char suffix[256] = "";
+ static char cmd[4096] = "";
+diff --git a/src/SDCCutil.h b/src/SDCCutil.h
+index 3bf4ec3e8..464a6d9c2 100644
+--- a/src/SDCCutil.h
++++ b/src/SDCCutil.h
+@@ -168,6 +168,7 @@ unsigned long escapeValueInRange (escapeValue escape, unsigned long limit);
+ /* A zero limit preserves the unrestricted conversion used outside literals. */
+ const char *copyStrWithEscapeLimit (const char *src, size_t *size, unsigned long limit);
+ const char *copyStr (const char *src, size_t *size);
++const uint32_t *copyStr32 (const char *src, size_t *size, unsigned long limit);
+ 
+ const uint32_t *utf_32_from_utf_8 (size_t *utf_32_len, const char *utf_8, size_t utf_8_len);
+ const uint16_t *utf_16_from_utf_32 (size_t *utf_16_len, const uint32_t *utf_32, size_t utf_32_len);
+diff --git a/src/SDCCval.c b/src/SDCCval.c
+index e023022a8..ec7f898ef 100644
+--- a/src/SDCCval.c
++++ b/src/SDCCval.c
+@@ -2014,14 +2014,10 @@ strVal (const char *s)
+     }
+   else
+     {
+-      // Convert input string (mixed UTF-8 and UTF-32) to UTF-8 first (handling all escape sequences, etc).
+-      utf_8 = copyStrWithEscapeLimit (s + 1, &utf_8_size, escapeLimit);
+-
+       size_t utf_32_size;
+-      // Convert to UTF-32 next, since converting UTF-32 to UTF-16 is easier than UTF-8 to UTF-16.
+-      const uint32_t *utf_32 = utf_32_from_utf_8 (&utf_32_size, utf_8, utf_8_size);
+-
+-      dbuf_free (utf_8);
++      // Convert input string (mixed UTF-8 and UTF-32) to UTF-32 first (handling all escape sequences, etc),
++      // since converting UTF-32 to UTF-16 is easier than UTF-8 to UTF-16.
++      const uint32_t *utf_32 = copyStr32 (s + 1, &utf_32_size, escapeLimit);
+ 
+       if (s[0] == 'U' || s[0] == 'L') // UTF-32 string literal
+         {
+diff --git a/support/regression/tests/bug-4226.c b/support/regression/tests/bug-4226.c
+new file mode 100644
+index 000000000..cb6ea6aa1
+--- /dev/null
++++ b/support/regression/tests/bug-4226.c
+@@ -0,0 +1,96 @@
++/* bug-4226.c
++   Numeric escape sequences in wide string literals give the values of single
++   elements. Values above 0xff keep all their bits, and values from 0x80 to
++   0xff are not decoded as bytes of UTF-8.
++ */
++
++#include <testfwk.h>
++
++#include <stddef.h> // For wchar_t
++#if defined(__SDCC) || defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__APPLE__) && !defined(__OpenBSD__) // macOS and OpenBSD lack uchar.h.
++#include <uchar.h> // For char16_t, char32_t
++#define HAVE_UCHAR
++#endif
++
++#define ELEMENTS(a) (sizeof (a) / sizeof ((a)[0]))
++
++#ifdef HAVE_UCHAR
++static const char16_t s16[] = u"\x100\400\x7f\x80\xff\x7ff\xd7ff\xd800\xdfff\xffff\0X";
++static const char16_t e16[] = {0x100, 0x100, 0x7f, 0x80, 0xff, 0x7ff, 0xd7ff, 0xd800, 0xdfff, 0xffff, 0, 'X', 0};
++
++static const char32_t s32[] = U"\x100\400\x80\xff\xd800\x10000\x110000\x80000000\xffffffff\0X";
++static const char32_t e32[] = {0x100, 0x100, 0x80, 0xff, 0xd800, 0x10000, 0x110000, 0x80000000, 0xffffffff, 0, 'X', 0};
++
++/* Characters of the source and universal character names are code points. */
++static const char16_t c16[] = u"A\xe9éé\x20ac€€";
++static const char16_t ec16[] = {'A', 0xe9, 0xe9, 0xe9, 0x20ac, 0x20ac, 0x20ac, 0};
++
++static const char32_t c32[] = U"\xe9éé\x1f600😀\U0001f600";
++static const char32_t ec32[] = {0xe9, 0xe9, 0xe9, 0x1f600, 0x1f600, 0x1f600, 0};
++#endif
++
++static const wchar_t sw[] = L"\x80\xe9\xff\x100\2000\0X";
++static const wchar_t ew[] = {0x80, 0xe9, 0xff, 0x100, 0x80, '0', 0, 'X', 0};
++
++void
++testChar16 (void)
++{
++#ifdef HAVE_UCHAR
++  unsigned char i;
++
++  ASSERT (ELEMENTS (s16) == ELEMENTS (e16));
++  for (i = 0; i < ELEMENTS (e16); i++)
++    ASSERT (s16[i] == e16[i]);
++
++  ASSERT (ELEMENTS (c16) == ELEMENTS (ec16));
++  for (i = 0; i < ELEMENTS (ec16); i++)
++    ASSERT (c16[i] == ec16[i]);
++#endif
++}
++
++void
++testChar32 (void)
++{
++#ifdef HAVE_UCHAR
++  unsigned char i;
++
++  ASSERT (ELEMENTS (s32) == ELEMENTS (e32));
++  for (i = 0; i < ELEMENTS (e32); i++)
++    ASSERT (s32[i] == e32[i]);
++
++  ASSERT (ELEMENTS (c32) == ELEMENTS (ec32));
++  for (i = 0; i < ELEMENTS (ec32); i++)
++    ASSERT (c32[i] == ec32[i]);
++#endif
++}
++
++void
++testWchar (void)
++{
++  unsigned char i;
++
++  ASSERT (ELEMENTS (sw) == ELEMENTS (ew));
++  for (i = 0; i < ELEMENTS (ew); i++)
++    ASSERT (sw[i] == ew[i]);
++}
++
++/* An array with automatic storage duration, adjacent string literals, and a
++   pointer to a string literal. */
++void
++testLocal (void)
++{
++#ifdef HAVE_UCHAR
++  char16_t a16[] = u"A" u"\x1234" "\x80";
++  const char32_t *p32 = U"\xe9\x12345678";
++
++  ASSERT (ELEMENTS (a16) == 4);
++  ASSERT (a16[0] == 'A');
++  ASSERT (a16[1] == 0x1234);
++  ASSERT (a16[2] == 0x80);
++  ASSERT (a16[3] == 0);
++
++  ASSERT (p32[0] == 0xe9);
++  ASSERT (p32[1] == 0x12345678);
++  ASSERT (p32[2] == 0);
++#endif
++}

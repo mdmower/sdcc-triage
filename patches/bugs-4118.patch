@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Tue, 17 Nov 2026 23:43:26 -0800
+Subject: [PATCH] [bugs #4118] Do not crash on a parameter that is declared
+ constexpr
+
+constexpr is not a storage class that parameters can have, and the
+parser reports error 198 for it. The parser left the constexpr marker in
+the type specifier of the parameter. constExprValue reads the value of
+every symbol that has the marker from the initializer of the symbol.
+Parameters do not have initializers, so constExprValue passed a null
+pointer to copyValue, and the compiler crashed with SIGSEGV when the
+function returned the parameter, compared it, or computed with it.
+
+The three alternatives of parameter_declaration now clear the marker
+where they report the error. After the error, the compiler treats the
+parameter as an ordinary one.
+
+Adds valdiag/tests/bug-4118.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCC.y                       | 13 ++++++--
+ support/valdiag/tests/bug-4118.c | 51 ++++++++++++++++++++++++++++++++
+ 2 files changed, 62 insertions(+), 2 deletions(-)
+ create mode 100644 support/valdiag/tests/bug-4118.c
+
+diff --git a/src/SDCC.y b/src/SDCC.y
+index bc7840d3e..e9aa6648c 100644
+--- a/src/SDCC.y
++++ b/src/SDCC.y
+@@ -1856,7 +1856,12 @@ parameter_declaration
+           symbol *loop;
+ 
+           if (IS_SPEC ($1) && !IS_VALID_PARAMETER_STORAGE_CLASS_SPEC ($1))
+-            werror (E_STORAGE_CLASS_FOR_PARAMETER, $2->name);
++            {
++              werror (E_STORAGE_CLASS_FOR_PARAMETER, $2->name);
++              /* The compiler reads the values of constexpr objects from their
++                 initializers, and parameters do not have initializers. */
++              SPEC_CONSTEXPR ($1) = 0;
++            }
+           pointerTypes ($2->type, $1);
+           if (IS_SPEC ($2->etype))
+             SPEC_NEEDSPAR($2->etype) = 0;
+@@ -1876,6 +1881,7 @@ parameter_declaration
+           if (IS_SPEC ($1) && !IS_VALID_PARAMETER_STORAGE_CLASS_SPEC ($1))
+             {
+               werror (E_STORAGE_CLASS_FOR_PARAMETER, "type name");
++              SPEC_CONSTEXPR ($1) = 0;
+             }
+           pointerTypes ($2,$1);
+           for (p = $2; p && p->next; p = p->next)
+@@ -1901,7 +1907,10 @@ parameter_declaration
+             SPEC_CONST ($1) || SPEC_RESTRICT ($1) || SPEC_VOLATILE ($1) || SPEC_ATOMIC ($1))) // No qualifier allowed with void
+             werror (E_VOID_SHALL_BE_LONELY);
+           else if (IS_SPEC ($1) && !IS_VALID_PARAMETER_STORAGE_CLASS_SPEC ($1))
+-            werror (E_STORAGE_CLASS_FOR_PARAMETER, "type name");
++            {
++              werror (E_STORAGE_CLASS_FOR_PARAMETER, "type name");
++              SPEC_CONSTEXPR ($1) = 0;
++            }
+ 
+           $$ = newValue ();
+           $$->type = $1;
+diff --git a/support/valdiag/tests/bug-4118.c b/support/valdiag/tests/bug-4118.c
+new file mode 100644
+index 000000000..4bd033977
+--- /dev/null
++++ b/support/valdiag/tests/bug-4118.c
+@@ -0,0 +1,51 @@
++/* bug-4118.c
++   constexpr is not a storage class that parameters can have. For a parameter
++   that is declared constexpr, the compiler reports an error and then treats
++   the parameter as an ordinary one, which the function can use.
++ */
++
++#ifdef __SDCC
++#pragma std_c23
++#endif
++
++#ifdef TEST1
++int f (constexpr int x) /* ERROR */
++{
++  return x;
++}
++#endif
++
++#ifdef TEST2
++int f (constexpr int x) /* ERROR */
++{
++  return x == 1;
++}
++#endif
++
++#ifdef TEST3
++_Bool f (constexpr int x) /* ERROR */
++{
++  return x;
++}
++#endif
++
++#ifdef TEST4
++int f (int a, constexpr int b, int c) /* ERROR */
++{
++  return a + b + c;
++}
++#endif
++
++#ifdef TEST5
++typedef int I;
++
++int f (constexpr I x) /* ERROR */
++{
++  return x;
++}
++#endif
++
++#ifdef TEST6
++int f (constexpr int); /* ERROR */
++int g (constexpr int *); /* ERROR */
++#endif

@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Wed, 18 Nov 2026 00:21:45 -0800
+Subject: [PATCH] [bugs #3357] Keep FUNC_HASBODY for a function that is
+ declared again
+
+addSymChain() replaces the symbol of an earlier declaration at file
+scope with the symbol of the new declaration. Where the earlier symbol
+was the symbol of a definition, the new symbol did not have
+FUNC_HASBODY, and the functions that test the flag treated the function
+as one without a body:
+
+    int func (int c) { return c; }
+    int func (int);
+
+- emitRegularMap() did not add func to the publics unless the
+  translation unit used func after the declaration. For the ports that
+  define the label of a function with one colon, such as mcs51 and
+  stm8, the symbol was then local, and other modules could not call the
+  function.
+- checkFunction() accepted a second definition of func, and the
+  assembler reported the label that is defined twice.
+- createInterruptVect() reported error 74 (function 'main' undefined)
+  for a main() that is declared again after its definition.
+
+Functions with a declaration before their definition were not affected
+by the first item, because checkFunction() adds the symbol of such a
+definition to the publics.
+
+addSymChain() now sets FUNC_HASBODY for the new symbol when code was
+generated for the earlier one. Inline definitions for which code is not
+generated do not get the flag, because emitRegularMap() would declare
+their functions global in a module that does not define them.
+
+Functions that are declared before and after their definition now get
+two .globl lines, one for the symbol that checkFunction() adds to the
+publics and one for the symbol that emitRegularMap() adds.
+
+Adds tests/bug-3357.c, whose function is in fwk/lib/extern1.c, and
+valdiag test bug-3357.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCsymt.c                       |  7 ++++
+ support/regression/fwk/lib/extern1.c | 11 ++++++
+ support/regression/tests/bug-3357.c  | 16 +++++++++
+ support/valdiag/tests/bug-3357.c     | 52 ++++++++++++++++++++++++++++
+ 4 files changed, 86 insertions(+)
+ create mode 100644 support/regression/tests/bug-3357.c
+ create mode 100644 support/valdiag/tests/bug-3357.c
+
+diff --git a/src/SDCCsymt.c b/src/SDCCsymt.c
+index 88836c354..53f5e8e27 100644
+--- a/src/SDCCsymt.c
++++ b/src/SDCCsymt.c
+@@ -1753,6 +1753,13 @@ addSymChain (symbol **symHead)
+           if (csym->ival && !sym->ival)
+             sym->ival = csym->ival;
+           sym->generated |= csym->generated;
++          /* sym replaces csym in the symbol table. emitRegularMap () makes functions
++             public and checkFunction () rejects a second body where FUNC_HASBODY is set,
++             so sym needs the flag when csym is a definition. Inline definitions for which
++             code was not generated are excluded, because the module would declare the
++             function global and not define it. */
++          if (csym->generated && IFFUNC_HASBODY (csym->type))
++            FUNC_HASBODY (sym->type) = true;
+ 
+           if (IS_EXTERN (sym->etype) && IFFUNC_ISINLINE (csym->type))
+             {
+diff --git a/support/regression/fwk/lib/extern1.c b/support/regression/fwk/lib/extern1.c
+index c3974972e..01701c90c 100644
+--- a/support/regression/fwk/lib/extern1.c
++++ b/support/regression/fwk/lib/extern1.c
+@@ -26,3 +26,14 @@ has_undefined_symbol2(void) {
+   /* empty */
+ }
+ 
++/* needed by tests/bug-3357.c
++   the declaration has to follow the definition,
++   and this file must not call the function */
++int
++bug_3357 (int c)
++{
++  return c + 1;
++}
++
++int bug_3357 (int c);
++
+diff --git a/support/regression/tests/bug-3357.c b/support/regression/tests/bug-3357.c
+new file mode 100644
+index 000000000..ffbd044c7
+--- /dev/null
++++ b/support/regression/tests/bug-3357.c
+@@ -0,0 +1,16 @@
++/* bug-3357.c
++   Functions that were declared again after their definition, and not called
++   in their translation unit, did not get a global symbol for some ports, so
++   other translation units could not call them. bug_3357 is defined in
++   fwk/lib/extern1.c, and a declaration follows the definition there.
++ */
++
++#include <testfwk.h>
++
++int bug_3357 (int c);
++
++void
++testBug (void)
++{
++  ASSERT (bug_3357 (41) == 42);
++}
+diff --git a/support/valdiag/tests/bug-3357.c b/support/valdiag/tests/bug-3357.c
+new file mode 100644
+index 000000000..bbedca04e
+--- /dev/null
++++ b/support/valdiag/tests/bug-3357.c
+@@ -0,0 +1,52 @@
++/* bug-3357.c
++
++   After a declaration that followed the definition of a function, the symbol
++   of the function did not record the body, and the compiler accepted a second
++   definition.
++ */
++
++#ifdef TEST1
++int f (int c)
++{
++  return c;
++}
++
++int f (int c);
++
++int f (int c) /* ERROR */
++{
++  return c + 1;
++}
++#endif
++
++#ifdef TEST2
++/* Declarations before and after the one definition are valid. */
++int g (int c);
++
++int g (int c)
++{
++  return c;
++}
++
++int g (int c);
++extern int g (int c);
++#endif
++
++#ifdef TEST3
++static int h (int c)
++{
++  return c;
++}
++
++static int h (int c);
++
++static int h (int c) /* ERROR */
++{
++  return c + 1;
++}
++
++int i (void)
++{
++  return h (1);
++}
++#endif
