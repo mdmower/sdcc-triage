@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Fri, 13 Nov 2026 13:45:26 -0800
+Subject: [PATCH] [local #0013] Give the value of an assignment the type of the
+ left operand
+
+The value of an assignment expression is the value of the left operand
+after the assignment, and it has the type of the left operand (C11
+6.5.16). compareType returns -2 for two types that differ in signedness
+only, and checkTypes casts the right operand for -1 only. geniCodeAssign
+then returned the right operand with its own type, and the expression
+that uses the value converted it with the wrong signedness:
+
+    volatile unsigned char vu;
+    signed char sc = -1;
+    int i;
+
+    i = vu = sc;                /* i was -1 and must be 255 */
+
+The value was wrong for every integer width, for a constant of the other
+signedness, for a compound assignment whose result before the store has
+the other signedness, and for a pointer to a type of the other
+signedness. It was wrong where the left operand is volatile, a local
+variable, or an object that is accessed through a pointer. For a global
+left operand that is not volatile, geniCodeAssign returned an iTemp of
+the left type that is assigned the right operand without a cast. That
+value was wrong where a later pass replaced the iTemp by the right
+operand, as for mcs51 with --model-large.
+
+ast2iCode now returns a cast of the right operand to the type of the
+left operand. The cast follows the assignment, so the iCode of the
+assignment does not change, and killDeadCode removes the cast when the
+value is not used. A volatile right operand is cast before the
+assignment, so that it is read once. The value of a bit-field is read
+from the left operand as before.
+
+Adds tests/assignment-value.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCicode.c                             |  34 +++++
+ support/regression/tests/assignment-value.c | 157 ++++++++++++++++++++
+ 2 files changed, 191 insertions(+)
+ create mode 100644 support/regression/tests/assignment-value.c
+
+diff --git a/src/SDCCicode.c b/src/SDCCicode.c
+index 4c6490b2a..9262f9cac 100644
+--- a/src/SDCCicode.c
++++ b/src/SDCCicode.c
+@@ -5009,6 +5009,40 @@ ast2iCode (ast * tree, int lvl)
+           right = geniCodeRValue (right, true);
+         else
+           right = geniCodeRValue (right, false);
++
++        /* The value of an assignment has the type of the left operand.
++           checkTypes() does not cast a right operand whose type differs
++           from that type in signedness only, so the value is a cast of
++           the right operand. geniCodeAssign() returns the left operand
++           for a bit-field. */
++        if (!IS_BITVAR (tree->ftype) && compareType (tree->ftype, operandType (right), false) == -2)
++          {
++            sym_link *type = copyLinkChain (tree->ftype);
++
++            /* iTemps are not volatile, see checkTypes() */
++            if (IS_DECL (type))
++              {
++                DCL_PTR_VOLATILE (type) = 0;
++                DCL_PTR_ATOMIC (type) = 0;
++              }
++            else
++              {
++                SPEC_VOLATILE (type) = 0;
++                SPEC_ATOMIC (type) = 0;
++              }
++
++            /* A volatile right operand is read once, so the cast
++               precedes the assignment. Any other cast follows it, and
++               the iCode of the assignment itself is the same whether
++               the value is used or not. */
++            if (isOperandVolatile (right, false))
++              right = geniCodeCast (type, right, true);
++            else
++              {
++                geniCodeAssign (left, right, 0, 1);
++                return geniCodeCast (type, right, true);
++              }
++          }
+         return geniCodeAssign (left, right, 0, 1);
+       }
+     case MUL_ASSIGN:
+diff --git a/support/regression/tests/assignment-value.c b/support/regression/tests/assignment-value.c
+new file mode 100644
+index 000000000..87181f0e3
+--- /dev/null
++++ b/support/regression/tests/assignment-value.c
+@@ -0,0 +1,157 @@
++/** assignment-value.c
++    The value of an assignment expression is the value of the left operand
++    after the assignment, and it has the type of the left operand. When the
++    right operand has the other signedness, the value that is used is the
++    converted one.
++ */
++
++#include <testfwk.h>
++
++#include <stdint.h>
++
++#ifdef __SDCC
++/* some of the constants below do not fit in the type of the left operand */
++#pragma disable_warning 158
++#endif
++
++volatile uint8_t vu8;
++volatile int8_t vs8;
++volatile uint16_t vu16;
++volatile int16_t vs16;
++volatile uint32_t vu32;
++
++uint8_t gu8;
++int8_t gs8;
++uint8_t au8[2];
++struct { int8_t s; uint8_t u; } st;
++uint8_t *pu8 = &gu8;
++uint8_t idx = 1;
++
++int8_t s8 = -1;
++uint8_t u8 = 200;
++int16_t s16 = -1;
++uint16_t u16 = 50000u;
++int32_t s32 = -1;
++
++int16_t i;
++int32_t l;
++
++/* The compiler may not read a volatile left operand to get the value. */
++void
++testVolatile (void)
++{
++  i = vu8 = s8;
++  ASSERT (i == 255);
++  i = vs8 = u8;
++  ASSERT (i == -56);
++
++  l = vu16 = s16;
++  ASSERT (l == 65535l);
++  l = vs16 = u16;
++  ASSERT (l == -15536l);
++
++  ASSERT ((vu32 = s32) >> 31 == 1);
++}
++
++void
++testConstant (void)
++{
++  i = vs8 = 100 + 100;
++  ASSERT (i == -56);
++  i = vu8 = 100 + 100;
++  ASSERT (i == 200);
++
++  i = vs8 = 30 * 8;
++  ASSERT (i == -16);
++  i = vu8 = -1;
++  ASSERT (i == 255);
++}
++
++void
++testObject (void)
++{
++  uint8_t u;
++  int8_t s;
++
++  i = u = s8;
++  ASSERT (i == 255);
++  ASSERT (u == 255);
++  i = s = u8;
++  ASSERT (i == -56);
++  ASSERT (s == -56);
++
++  i = gu8 = s8;
++  ASSERT (i == 255);
++  i = gs8 = u8;
++  ASSERT (i == -56);
++
++  i = *pu8 = s8;
++  ASSERT (i == 255);
++  i = au8[idx] = s8;
++  ASSERT (i == 255);
++  i = st.s = u8;
++  ASSERT (i == -56);
++}
++
++/* The right operand is volatile, so it is read once. */
++void
++testVolatileRight (void)
++{
++  vs8 = -1;
++  i = vu8 = vs8;
++  ASSERT (i == 255);
++
++  vu8 = 200;
++  i = gs8 = vu8;
++  ASSERT (i == -56);
++  ASSERT (gs8 == -56);
++}
++
++int16_t
++widen (int16_t x)
++{
++  return x;
++}
++
++int16_t
++store (int8_t x)
++{
++  return vu8 = x;
++}
++
++void
++testUse (void)
++{
++  ASSERT ((vs8 = u8) < 0);
++  ASSERT ((vu8 = s8) == 255);
++
++  i = (vu8 = s8) + 1;
++  ASSERT (i == 256);
++  i = (vs8 = u8) / 2;
++  ASSERT (i == -28);
++  i = (vu8 = s8) >> 1;
++  ASSERT (i == 127);
++
++  ASSERT (widen (vu8 = s8) == 255);
++  ASSERT (store (-1) == 255);
++}
++
++void
++testCompound (void)
++{
++  uint8_t u = 0;
++
++  vu8 = 0;
++  i = (vu8 += s8);
++  ASSERT (i == 255);
++  vu8 = 0;
++  i = (vu8 -= 1);
++  ASSERT (i == 255);
++
++  vs16 = 0;
++  l = (vs16 += u16);
++  ASSERT (l == -15536l);
++
++  i = (u += s8);
++  ASSERT (i == 255);
++}

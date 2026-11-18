@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matt Mower <mdmower@cmphys.com>
+Date: Thu, 12 Nov 2026 12:32:24 -0800
+Subject: [PATCH] [bugs #3986] Do not cast literal operands to char before a
+ constant is folded
+
+decorateType() gives the operands of '+', '-', and '<<' the result type
+char when the value is assigned to a char, so that the operation is
+done in 8 bits. It also cast literal operands to char before valPlus(),
+valMinus(), and valShift() computed a constant from them. addCast()
+casts an int literal to signed char, and the constant was computed in
+char. 30 * 8 - 1 became -17, 1 << 7 became -128, and 200 + 100 became
+44. checkTypes() checks the range of a literal that is assigned, so
+
+    unsigned char a = 30 * 8 - 1;
+    unsigned char b = 1 << 7;
+
+got warning 158 (overflow in implicit constant conversion), and
+200 + 100 did not get it. 1 << 8 got warning 116 without a line number.
+
+decorateType() now applies the integer promotions to the operands of a
+sum or a difference when both are literals and the result type is char,
+and to the left operand of a left shift in that case. The constant is
+computed in the promoted type, and cheapestVal() reduces its type as it
+does for a product. The low 8 bits of the constant are the same as
+before. Values from 128 to 255 are unsigned char literals, where they
+were negative signed char literals.
+
+cheapestVal() gives the values 0 and 1 the type bool, and such
+constants now also come from sums, differences, and left shifts whose
+result type is char. Two functions computed a wrong constant from a
+bool literal:
+
+- valBitwise() computed '&', '|', and '^' of an unsigned char literal
+  and a bool literal in signed char, so (unsigned char) 0x80 | (2 - 1)
+  was -127. The result is now an unsigned char.
+- valUnaryPM() kept the type bool for the negation of a bool literal,
+  and -(1 * 1) got warning 158 when it was assigned to a signed char.
+  It now promotes a bool literal to int as it does a char literal.
+
+The complement of a constant keeps its 8-bit value when the result type
+is char. unsigned char c = ~0x80 is 0x7f and does not get the warning,
+and a sum with such an operand is computed from that value.
+
+Bugs #2733, #2877, and #3094 have the same cause.
+
+Adds valdiag test bug-3986.c.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ src/SDCCast.c                    | 20 ++++++-
+ src/SDCCval.c                    | 10 +++-
+ support/valdiag/tests/bug-3986.c | 95 ++++++++++++++++++++++++++++++++
+ 3 files changed, 123 insertions(+), 2 deletions(-)
+ create mode 100644 support/valdiag/tests/bug-3986.c
+
+diff --git a/src/SDCCast.c b/src/SDCCast.c
+index b3abc248b..47161e962 100644
+--- a/src/SDCCast.c
++++ b/src/SDCCast.c
+@@ -5237,6 +5237,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+       /* rewrite the tree */
+       if (IS_LITERAL (RTYPE (tree)) && IS_LITERAL (LTYPE (tree)))
+         {
++          /* Promote the operands even if the result is a char. The sum
++             of operands that were cast to char can wrap, and the range
++             of the constant is checked when it is assigned. */
++          if (resultTypeProp == RESULT_TYPE_CHAR)
++            resultTypeProp = RESULT_TYPE_NONE;
+           tree->left = addCast (tree->left, resultTypeProp, true);
+           tree->right = addCast (tree->right, resultTypeProp, true);
+           rewriteAstNodeVal (tree, valPlus (valFromType (LETYPE (tree)), valFromType (RETYPE (tree)), reduceTypeAllowed));
+@@ -5382,6 +5387,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+       /* rewrite the tree */
+       if (IS_LITERAL (RTYPE (tree)) && IS_LITERAL (LTYPE (tree)))
+         {
++          /* Promote the operands even if the result is a char. The
++             difference of operands that were cast to char can wrap, and
++             the range of the constant is checked when it is assigned. */
++          if (resultTypeProp == RESULT_TYPE_CHAR)
++            resultTypeProp = RESULT_TYPE_NONE;
+           tree->left = addCast (tree->left, resultTypeProp, true);
+           tree->right = addCast (tree->right, resultTypeProp, true);
+           rewriteAstNodeVal (tree, valMinus (valFromType (LETYPE (tree)), valFromType (RETYPE (tree)), reduceTypeAllowed));
+@@ -5606,7 +5616,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+ 
+       /* make smaller type only if it's a LEFT_OP */
+       if (tree->opval.op == LEFT_OP)
+-        tree->left = addCast (tree->left, resultTypeProp, true);
++        {
++          /* Promote the left operand when both operands are constants,
++             even if the result is a char. The result of a shift of an
++             operand that was cast to char can wrap, and the range of
++             the constant is checked when it is assigned. */
++          if (resultTypeProp == RESULT_TYPE_CHAR && IS_LITERAL (LTYPE (tree)) && IS_LITERAL (RTYPE (tree)))
++            resultTypeProp = RESULT_TYPE_NONE;
++          tree->left = addCast (tree->left, resultTypeProp, true);
++        }
+ 
+       propagateConstExpr (&tree->left, resultType, reduceTypeAllowed);
+       propagateConstExpr (&tree->right, resultType, reduceTypeAllowed);
+diff --git a/src/SDCCval.c b/src/SDCCval.c
+index 6ba5b4911..e023022a8 100644
+--- a/src/SDCCval.c
++++ b/src/SDCCval.c
+@@ -2636,7 +2636,8 @@ valUnaryPM (value * val, bool reduceType)
+       else
+         SPEC_CVAL (val->etype).v_int = -SPEC_CVAL (val->etype).v_int;
+ 
+-      if (SPEC_NOUN (val->etype) == V_CHAR)
++      /* cheapestVal() gives 0 and 1 the type bool, which cannot hold -1 */
++      if (SPEC_NOUN (val->etype) == V_CHAR || IS_BOOLEAN (val->etype))
+         {
+           /* promote to 'signed int', cheapestVal() might reduce it again */
+           SPEC_USIGN (val->etype) = 0;
+@@ -3256,6 +3257,13 @@ valBitwise (value * lval, value * rval, int op, bool reduceType)
+   val->type = computeType (lval->etype, rval->etype, RESULT_TYPE_CHAR, op);
+   val->etype = getSpec (val->type);
+   SPEC_SCLS (val->etype) = S_LITERAL;
++  /* cheapestVal() gives 0 and 1 the type bool, which does not have the
++     unsigned flag, and computeType() makes the result of an unsigned
++     char and such a bool a signed char. The result is an unsigned char
++     here, so that a value above 127 stays positive. */
++  if (IS_CHAR (val->etype) &&
++      (IS_BOOLEAN (lval->etype) && SPEC_USIGN (rval->etype) || IS_BOOLEAN (rval->etype) && SPEC_USIGN (lval->etype)))
++    SPEC_USIGN (val->etype) = 1;
+ 
+   switch (op)
+     {
+diff --git a/support/valdiag/tests/bug-3986.c b/support/valdiag/tests/bug-3986.c
+new file mode 100644
+index 000000000..5dd46b924
+--- /dev/null
++++ b/support/valdiag/tests/bug-3986.c
+@@ -0,0 +1,95 @@
++/* bug-3986.c
++
++   Constant sums, differences, and left shifts that are assigned to a char
++   were folded after their operands had been cast to char. Warning 158
++   (overflow in implicit constant conversion) was given for values that
++   fit, such as 30 * 8 - 1 and 1 << 7 for an unsigned char, and was not
++   given for values that do not fit, such as 200 + 100.
++ */
++
++volatile unsigned char u;
++volatile signed char s;
++
++void g (unsigned char c);
++
++#ifdef TEST1
++/* Sums and differences that fit. */
++unsigned char i = 30 * 8 - 1;
++
++void f (void)
++{
++  unsigned char foo = 30 * 8 - 1;
++
++  u = foo;
++  u = 30 * 8;
++  u = 30 * 8 - 1;
++  u = 240 - 1;
++  u = 256 - 1;
++  u = 127 + 1;
++  u = 200 + 55;
++  u = 100000 - 99800;
++  u = 100L + 100L;
++  u = 1 ? 240 - 1 : 0;
++  s = 1 * 5 - 2 * 5;
++  s = 100 + 27;
++  s = 0 - 128;
++  s = -127 - 1;
++  g (30 * 8 - 1);
++}
++#endif
++
++#ifdef TEST2
++/* Sums and differences that do not fit. */
++void f (void)
++{
++  u = 200 + 100;        /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  u = 255 + 1;          /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  u = 20 * 10 + 10 * 10;/* WARNING(SDCC) */ /* IGNORE(GCC) */
++  u = 0 - 1;            /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  s = 100 + 100;        /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  s = 127 + 1;          /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  s = 0 - 129;          /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  s = -127 - 2;         /* WARNING(SDCC) */ /* IGNORE(GCC) */
++}
++#endif
++
++#ifdef TEST3
++/* Left shifts that fit. */
++void f (void)
++{
++  u = 1 << 7;
++  u = 3 << 6;
++  u = 239 << 0;
++  u = (1 << 7) | 1;
++  u = (1 << 8) - 1;
++  s = 1 << 6;
++  g (1 << 7);
++}
++#endif
++
++#ifdef TEST4
++/* Left shifts that do not fit. */
++void f (void)
++{
++  u = 1 << 8;           /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  u = 3 << 7;           /* WARNING(SDCC) */ /* IGNORE(GCC) */
++  s = 1 << 7;           /* WARNING(SDCC) */ /* IGNORE(GCC) */
++}
++#endif
++
++#ifdef TEST5
++/* Folded constants with the value 0 or 1 have the type bool in SDCC. These
++   are operands of a bitwise operation with an unsigned char constant, or
++   of a negation. */
++void f (void)
++{
++  u = (1 << 7) | (1 << 0);
++  u = ((unsigned char) 1 << 7) | ((unsigned char) 1 << 0);
++  u = (unsigned char) 0x80 | (2 - 1);
++  u = (unsigned char) 0x80 ^ (1 + 0);
++  u = (unsigned char) 0x80 | ((unsigned char) 1 - (unsigned char) 1);
++  s = -(2 - 1);
++  s = -(1 << 0);
++  s = -(1 * 1);
++}
++#endif
