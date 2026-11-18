@@ -69,7 +69,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/jump-range.c
 
 diff --git a/src/mcs51/main.c b/src/mcs51/main.c
-index f9a901f06..bd60bdecc 100644
+index 6ff9cbe47..bd668edac 100644
 --- a/src/mcs51/main.c
 +++ b/src/mcs51/main.c
 @@ -560,7 +560,10 @@ instructionSize(char *inst, char *op1, char *op2)
@@ -85,7 +85,7 @@ index f9a901f06..bd60bdecc 100644
    if (ISINST ("rrc")) return 1;
    if (ISINST ("rl")) return 1;
 diff --git a/src/mcs51/peeph.def b/src/mcs51/peeph.def
-index 96d8688ec..2069c589d 100644
+index b489c7a16..ab919048e 100644
 --- a/src/mcs51/peeph.def
 +++ b/src/mcs51/peeph.def
 @@ -4276,6 +4276,8 @@ replace restart {

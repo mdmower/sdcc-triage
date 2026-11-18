@@ -20,10 +20,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  1 file changed, 5 insertions(+)
 
 diff --git a/src/SDCCcse.c b/src/SDCCcse.c
-index 9c7395167..9dde24178 100644
+index 19705bf1f..d7c85c212 100644
 --- a/src/SDCCcse.c
 +++ b/src/SDCCcse.c
-@@ -493,9 +493,14 @@ DEFSETFUNC (findPointerSet)
+@@ -502,9 +502,14 @@ DEFSETFUNC (findPointerSet)
    V_ARG (operand **, opp);
    V_ARG (operand *, rop);
  

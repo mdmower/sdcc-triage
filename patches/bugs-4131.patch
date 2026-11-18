@@ -128,7 +128,7 @@ index 42e933f02..4c6490b2a 100644
        geniCodeReturnStruct (tree->right, lvl);
        return NULL;
 diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
-index 26e69c238..e88ee5137 100644
+index 42af51e8e..54110ccf8 100644
 --- a/src/mcs51/gen.c
 +++ b/src/mcs51/gen.c
 @@ -5499,11 +5499,10 @@ genRet (iCode *ic)

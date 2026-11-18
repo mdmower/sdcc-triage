@@ -55,10 +55,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-3986.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index b3abc248b..47161e962 100644
+index fd65c953a..5ab00a6f4 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -5237,6 +5237,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+@@ -5262,6 +5262,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
        /* rewrite the tree */
        if (IS_LITERAL (RTYPE (tree)) && IS_LITERAL (LTYPE (tree)))
          {
@@ -70,7 +70,7 @@ index b3abc248b..47161e962 100644
            tree->left = addCast (tree->left, resultTypeProp, true);
            tree->right = addCast (tree->right, resultTypeProp, true);
            rewriteAstNodeVal (tree, valPlus (valFromType (LETYPE (tree)), valFromType (RETYPE (tree)), reduceTypeAllowed));
-@@ -5382,6 +5387,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+@@ -5420,6 +5425,11 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
        /* rewrite the tree */
        if (IS_LITERAL (RTYPE (tree)) && IS_LITERAL (LTYPE (tree)))
          {
@@ -82,7 +82,7 @@ index b3abc248b..47161e962 100644
            tree->left = addCast (tree->left, resultTypeProp, true);
            tree->right = addCast (tree->right, resultTypeProp, true);
            rewriteAstNodeVal (tree, valMinus (valFromType (LETYPE (tree)), valFromType (RETYPE (tree)), reduceTypeAllowed));
-@@ -5606,7 +5616,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+@@ -5644,7 +5654,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
  
        /* make smaller type only if it's a LEFT_OP */
        if (tree->opval.op == LEFT_OP)

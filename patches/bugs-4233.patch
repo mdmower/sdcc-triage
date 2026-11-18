@@ -45,10 +45,10 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-4233.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index cb56ca1ea..dd3e1bd48 100644
+index 9e1c6d7eb..ea47e23ff 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
-@@ -5575,10 +5575,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
+@@ -5613,10 +5613,15 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
          changePointer (LTYPE (tree));
        checkTypeSanity (LETYPE (tree), "(cast)");
  

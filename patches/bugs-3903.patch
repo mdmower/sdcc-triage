@@ -20,7 +20,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  2 files changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
-index 9189ad43f..de1c29cfe 100644
+index f5f5889c5..368b8b461 100644
 --- a/src/mcs51/gen.c
 +++ b/src/mcs51/gen.c
 @@ -2072,6 +2072,11 @@ loadDptrFromOperand (operand *op, bool loadBToo)

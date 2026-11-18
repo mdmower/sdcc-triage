@@ -30,7 +30,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/valdiag/tests/bug-4145.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index 47c596bd8..7f9373d38 100644
+index 2409bae96..dea88368f 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -2245,8 +2245,9 @@ constExprValue (ast * cexpr, int check)
@@ -56,7 +56,7 @@ index 47c596bd8..7f9373d38 100644
      {
        ast *newAst = newAst_VALUE (constExprValue (*ptree, true));
        copyAstLoc (newAst, *ptree);
-@@ -6786,6 +6789,13 @@ typeofOp (ast *tree)
+@@ -6824,6 +6827,13 @@ typeofOp (ast *tree)
    SPEC_SCLS (spec_type) = 0;
    SPEC_STAT (spec_type) = 0;
    SPEC_EXTR (spec_type) = 0;

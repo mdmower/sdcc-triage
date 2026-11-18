@@ -53,7 +53,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-2672.c
 
 diff --git a/src/mcs51/peeph.def b/src/mcs51/peeph.def
-index 7c94ef682..96d8688ec 100644
+index a55611783..b489c7a16 100644
 --- a/src/mcs51/peeph.def
 +++ b/src/mcs51/peeph.def
 @@ -404,7 +404,7 @@ replace {

@@ -16,7 +16,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-3843.c
 
 diff --git a/src/mcs51/main.c b/src/mcs51/main.c
-index 8912f96f8..f9a901f06 100644
+index 9130a2351..6ff9cbe47 100644
 --- a/src/mcs51/main.c
 +++ b/src/mcs51/main.c
 @@ -884,7 +884,9 @@ asmLineNodeFromLineNode (lineNode *ln)

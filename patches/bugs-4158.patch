@@ -20,7 +20,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/bug-4158.c
 
 diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
-index d5d29586d..9189ad43f 100644
+index 0b2ee3686..f5f5889c5 100644
 --- a/src/mcs51/gen.c
 +++ b/src/mcs51/gen.c
 @@ -5608,6 +5608,7 @@ genRet (iCode *ic)

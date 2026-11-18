@@ -41,7 +41,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  create mode 100644 support/regression/tests/compound-literal-eval.c
 
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index dd3e1bd48..fd6164bf0 100644
+index ea47e23ff..4c256aeb5 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -79,6 +79,7 @@ ast *optimizeGetWord (ast *, RESULT_TYPE);

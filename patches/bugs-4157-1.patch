@@ -19,7 +19,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  1 file changed, 8 insertions(+)
 
 diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
-index fead30fb7..4c95cfb50 100644
+index 75c3f3b65..9d29d14df 100644
 --- a/src/mcs51/gen.c
 +++ b/src/mcs51/gen.c
 @@ -5485,6 +5485,14 @@ genRet (iCode *ic)

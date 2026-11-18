@@ -22,7 +22,7 @@ Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
  2 files changed, 2 insertions(+), 4 deletions(-)
 
 diff --git a/src/mcs51/gen.c b/src/mcs51/gen.c
-index de1c29cfe..fead30fb7 100644
+index 368b8b461..75c3f3b65 100644
 --- a/src/mcs51/gen.c
 +++ b/src/mcs51/gen.c
 @@ -473,7 +473,7 @@ getFreePtr (iCode * ic, asmop * aop, bool result)
